@@ -1,0 +1,14 @@
+{
+  "name": "Sổ Cân Tôm - Lái",
+  "short_name": "Cân Tôm Lái",
+  "description": "Sổ cân tôm điện tử cho thương lái thu mua tôm",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f1f2ee",
+  "theme_color": "#0b5d58",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

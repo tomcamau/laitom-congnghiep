@@ -159,9 +159,6 @@ body.dark .money-display .label,body.dark .money-display .value{color:#6ee7b7}
 #printArea{display:none}
 </style>
 </head>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <body>
 <div class="container">
   <div class="header flex-shrink-0">
@@ -221,8 +218,7 @@ body.dark .money-display .label,body.dark .money-display .value{color:#6ee7b7}
 
 <script>
 const KEY='soCanTom_lai_v4';
-let db=JSON.parse(localStorage.getItem(KEY)||'null')||{tin:[],phieu:[],chuyen:[],khach:[],co:[],gia:[],tra:[],von:[],sheets:[],employees:[],activeSheet:null,active:null,payments:[],settings:{autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false}};
-db.employees=db.employees||[];
+let db=JSON.parse(localStorage.getItem(KEY)||'null')||{tin:[],phieu:[],chuyen:[],khach:[],co:[],gia:[],tra:[],von:[],sheets:[],activeSheet:null,active:null,payments:[],settings:{autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false}};
 if(!db.payments)db.payments=[];if(!db.von)db.von=[];
 db.settings=Object.assign({autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false},db.settings||{});
 db.phieu=db.phieu.map(p=>({coc:0,tienMat:0,chuyenKhoan:0,hinhAnh:[],thoiGian:null,gps:null,chiPhiAo:0,giaRieng:null,bi:0,tap:0,tapType:'kg',kgGross:null,...p}));
@@ -245,7 +241,7 @@ let phieuQ='',phieuPeriod='all',khachQ='',khachFilter='all';
 let mauKgV='',mauConV='';
 let quotaWarned=false;
 
-function save(skipCloud){try{localStorage.setItem(KEY,JSON.stringify(db));}catch(e){if(!quotaWarned){quotaWarned=true;alert('⚠️ Bộ nhớ đầy! Xóa bớt ảnh hoặc sao lưu rồi dọn dữ liệu cũ.');}}if(!skipCloud)cloudPush();}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(db));}catch(e){if(!quotaWarned){quotaWarned=true;alert('⚠️ Bộ nhớ đầy! Xóa bớt ảnh hoặc sao lưu rồi dọn dữ liệu cũ.');}}}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmt=n=>(Math.round(n||0)).toLocaleString('vi-VN');
 const fkg=n=>(n||0).toLocaleString('vi-VN',{maximumFractionDigits:1});
@@ -271,22 +267,12 @@ function applyStatsBar(){
 
 document.addEventListener('DOMContentLoaded',function(){
   isAutoDecimal=db.settings.autoDec||false;decimalPlaces=db.settings.decimalPlaces||1;colsPerTab=db.settings.colsPerTab||5;
-  applyTheme();applyStatsBar();ensureActive();ensureSheet();
-  initCloudAndRole();
+  applyTheme();applyStatsBar();ensureActive();ensureSheet();render();checkReminders();
   setInterval(autoSaveSession,30000);
 });
 function autoSaveSession(){if(mainTab==='bang'&&curSheet()){const s=curSheet();s.cells=gridData;s.cols=cols;s.rows=rows;save();}}
 
-function applyRoleNav(){
-  const hideForNV=['can','ban'];
-  document.querySelectorAll('nav button').forEach(b=>{
-    b.style.display=(myRole==='nv'&&hideForNV.includes(b.dataset.tab))?'none':'';
-  });
-}
-function goTab(t){
-  if(myRole==='nv'&&(t==='can'||t==='ban')){t='bang';}
-  mainTab=t;soSub=null;selKhach=null;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));vib();render();
-}
+function goTab(t){mainTab=t;soSub=null;selKhach=null;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));vib();render();}
 
 function render(){
   updateStats();
@@ -396,8 +382,7 @@ let tinForm=false,tinNguon='ao',tinLoai='the';
 function renderTin(){
   const e=editingTinId?db.tin.find(x=>x.id===editingTinId):null;
   let html='';
-  if(myRole==='nv')html+=`<div class="card" style="background:var(--accent-bg);border:1px solid var(--accent)"><b>👷 ${esc(myEmployeeName())}</b> — chỉ thấy ao được lái giao cho bạn.</div>`;
-  if(!tinForm&&myRole==='lai')html+=`<button class="btn ghost" onclick="tinForm=true;editingTinId=null;render()">＋ Tin ao mới (nghe điện thoại)</button>`;
+  if(!tinForm)html+=`<button class="btn ghost" onclick="tinForm=true;editingTinId=null;render()">＋ Tin ao mới (nghe điện thoại)</button>`;
   if(tinForm){
     html+=`<div class="card" style="border:2px solid var(--accent);margin-top:8px;">
       <h3>${e?'✏️ Đang bổ sung: '+esc(e.ten):'📞 Ghi tin báo'}</h3>
@@ -421,11 +406,9 @@ function renderTin(){
       ${e?'<p class="hint">✔ Cứ bổ sung rồi bấm Lưu, không mất dữ liệu.</p>':''}
     </div>`;
   }
-  const rawList=db.tin.slice().sort((a,b)=>((b.starred?1:0)-(a.starred?1:0))||(b.ts-a.ts));
-  const list=(myRole==='nv'?rawList.filter(t=>t.assignedTo===myEmployeeId):rawList).map(t=>{
+  const list=db.tin.slice().sort((a,b)=>((b.starred?1:0)-(a.starred?1:0))||(b.ts-a.ts)).map(t=>{
     const pill={moi:'<span class="tag new">📞 MỚI</span>',can:'<span class="tag new">📋 ĐANG CÂN</span>',chot:'<span class="tag ok">✅ ĐÃ CHỐT</span>',truot:'<span class="tag">✕ TRƯỢT</span>'}[t.status]||'';
     const isToday=t.hen===today();
-    const assignedEmp=(db.employees||[]).find(x=>x.id===t.assignedTo);
     return`<div class="card">
       <div class="row-flex" style="border:0">${pill}<div>${isToday&&t.status!=='chot'&&t.status!=='truot'?'<span class="tag warn">HÔM NAY</span> ':''}<span class="star" onclick="toggleStar('${t.id}')">${t.starred?'★':'☆'}</span><small>${new Date(t.ts).toLocaleDateString('vi-VN')}</small></div></div>
       <b>${esc(t.ten)}</b> <small>(${t.nguon==='co'?'cò':'chủ ao'})</small> ${t.sdt?`<a href="tel:${t.sdt}">📞</a>`:''}<br>
@@ -433,11 +416,9 @@ function renderTin(){
       ${t.coc?`<div class="hint">💰 Cọc: ${fmt(t.coc)} đ</div>`:''}
       ${t.gps?`<div style="margin-top:4px">${gpsLink(t.gps)}</div>`:''}
       ${t.note?`<div class="hint">📝 ${esc(t.note)}</div>`:''}
-      ${myRole==='lai'&&(db.employees||[]).length?`<div style="margin-top:6px"><label style="margin:0 0 3px">👷 Giao cho nhân viên</label><select onchange="assignTin('${t.id}',this.value)"><option value="">— Tự đi cân —</option>${db.employees.filter(x=>x.active!==false).map(x=>`<option value="${x.id}" ${t.assignedTo===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div>`:(assignedEmp?`<div class="hint">👷 Giao cho: ${esc(assignedEmp.name)}</div>`:'')}
       <div style="margin-top:6px;">
-        ${t.status!=='chot'&&myRole==='lai'?`<button class="btn small ghost" onclick="tinEdit('${t.id}')">✏️ Sửa</button>`:''}
-        ${t.status==='moi'||t.status==='can'?`<button class="btn small" onclick="tinCan('${t.id}')">📋 Xuống cân</button>`:''}
-        ${(t.status==='moi'||t.status==='can')&&myRole==='lai'?`<button class="btn small ghost" onclick="tinTruot('${t.id}')">✕ Trượt</button>`:''}
+        ${t.status!=='chot'?`<button class="btn small ghost" onclick="tinEdit('${t.id}')">✏️ Sửa</button>`:''}
+        ${t.status==='moi'||t.status==='can'?`<button class="btn small" onclick="tinCan('${t.id}')">📋 Xuống cân</button><button class="btn small ghost" onclick="tinTruot('${t.id}')">✕ Trượt</button>`:''}
       </div>
     </div>`;
   }).join('');
@@ -476,7 +457,7 @@ function renderBang(){
   const s=ensureSheet();
   const tong=sheetTong(s);
   const startCol=currentTab*colsPerTab,endCol=Math.min(startCol+colsPerTab,cols);
-  const openSheets=db.sheets.filter(x=>x.status==='mo'&&(myRole==='lai'||db.tin.find(t=>t.id===x.tinId&&t.assignedTo===myEmployeeId)||x.nguoiNhap));
+  const openSheets=db.sheets.filter(x=>x.status==='mo');
   const shIdx=Math.max(0,openSheets.findIndex(x=>x.id===s.id));
   let headerHtml='<tr><th style="width:28px;min-width:24px">#</th>';
   for(let c=startCol;c<endCol;c++)headerHtml+=`<th>C${c+1}</th>`;
@@ -923,7 +904,7 @@ function shareChuyen(id){const c=db.chuyen.find(x=>x.id===id);const s=cStats(c);
 // ===== 📒 SỔ =====
 function renderSo(){
   if(!soSub)return`<div class="tiles">
-    ${myRole==='lai'?`<button onclick="soSub='khach';render()">👥<br>Khách & nợ</button>
+    <button onclick="soSub='khach';render()">👥<br>Khách & nợ</button>
     <button onclick="soSub='pay';render()">💵<br>Thanh toán</button>
     <button onclick="soSub='von';render()">💳<br>Vốn vay</button>
     <button onclick="openReport()">📊<br>Báo cáo ngày</button>
@@ -931,8 +912,7 @@ function renderSo(){
     <button onclick="soSub='tk';render()">📈<br>Thống kê</button>
     <button onclick="soSub='gia';render()">💰<br>Bảng giá</button>
     <button onclick="soSub='co';render()">🤝<br>Cò</button>
-    <button onclick="soSub='nv';render()">👷<br>Nhân viên</button>
-    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>`:`<button onclick="openRemindersList()">🔔<br>Nhắc hẹn</button>`}
+    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>
   </div>`;
   if(soSub==='khach')return soKhach();
   if(soSub==='pay')return soPay();
@@ -940,45 +920,8 @@ function renderSo(){
   if(soSub==='tk')return soTK();
   if(soSub==='gia')return soGia();
   if(soSub==='co')return soCo();
-  if(soSub==='nv')return soNhanVien();
   return soData();
 }
-function myEmployeeName(){const e=(db.employees||[]).find(x=>x.id===myEmployeeId);return e?e.name:'Nhân viên';}
-function soNhanVien(){
-  const list=db.employees||[];
-  return backBtn+`<div class="card" style="margin-top:8px;">
-    <h3>👷 Nhân viên</h3>
-    <p class="hint">Tạo mã cho nhân viên, đưa mã này để họ nhập lúc mở app lần đầu trên máy của họ. Vào tab TIN BÁO để giao ao cho từng người.</p>
-    <button class="btn small" onclick="addEmployee()">➕ Thêm nhân viên</button>
-  </div>
-  <div class="card">
-    ${list.length?list.map(e=>{
-      const myTins=db.tin.filter(t=>t.assignedTo===e.id&&t.status!=='chot'&&t.status!=='truot');
-      return`<div class="row-flex" style="flex-direction:column;align-items:stretch;gap:4px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span><b>${esc(e.name)}</b> <span class="tag ${e.active===false?'':'ok'}">${e.active===false?'Đã khoá':'Hoạt động'}</span></span>
-          <span style="font-family:monospace;font-size:16px;letter-spacing:2px;font-weight:800;color:var(--accent)">${esc(e.code)}</span>
-        </div>
-        <small style="color:var(--muted)">Đang phụ trách: ${myTins.length?myTins.map(t=>esc(t.ten)).join(', '):'chưa gán ao nào'}</small>
-        <div style="display:flex;gap:6px">
-          <button class="btn small ghost" onclick="toggleEmployee('${e.id}')">${e.active===false?'Mở lại':'Khoá'}</button>
-          <button class="btn small danger" onclick="delEmployee('${e.id}')">🗑 Xoá</button>
-        </div>
-      </div>`;
-    }).join(''):'<i>Chưa có nhân viên nào</i>'}
-  </div>`;
-}
-function addEmployee(){
-  const name=prompt('Tên nhân viên:');if(!name||!name.trim())return;
-  const code=Math.random().toString(36).substring(2,8).toUpperCase();
-  db.employees=db.employees||[];
-  db.employees.push({id:uid(),name:name.trim(),code,active:true,createdAt:Date.now()});
-  save();render();
-  alert('✅ Đã tạo mã cho '+name.trim()+':\n\n'+code+'\n\nĐưa mã này cho nhân viên nhập lúc mở app lần đầu trên máy của họ.');
-}
-function toggleEmployee(id){const e=db.employees.find(x=>x.id===id);if(e){e.active=e.active===false?true:false;save();render();}}
-function delEmployee(id){if(confirm('Xoá nhân viên này? Các ao đang gán cho họ sẽ về "chưa gán".')){db.tin.forEach(t=>{if(t.assignedTo===id)t.assignedTo=null;});db.employees=(db.employees||[]).filter(x=>x.id!==id);save();render();}}
-function assignTin(id,empId){const t=db.tin.find(x=>x.id===id);if(t){t.assignedTo=empId||null;save();render();}}
 function afterSoRender(){if(soSub==='khach'&&!selKhach)renderKhachList();}
 const backBtn=`<button class="btn ghost" onclick="soSub=null;selKhach=null;render()">← Quay lại SỔ</button>`;
 function soKhach(){
@@ -1095,128 +1038,12 @@ function importJSON(){document.getElementById('fileInput').click();}
 function importData(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=function(ev){try{const data=JSON.parse(ev.target.result);if(confirm('Khôi phục sẽ THAY THẾ toàn bộ dữ liệu. Tiếp tục?')){db=data;db.settings=Object.assign({autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false},db.settings||{});if(!db.payments)db.payments=[];if(!db.von)db.von=[];save();applyTheme();render();alert('✅ Khôi phục thành công!');}}catch(err){alert('❌ Lỗi: '+err.message);}};reader.readAsText(file);e.target.value='';}
 function resetAll(){if(confirm('XOÁ TOÀN BỘ dữ liệu?')){if(confirm('Chắc chắn? Không khôi phục được!')){localStorage.removeItem(KEY);location.reload();}}}
 
-const net=()=>updateNetBadge();
-window.addEventListener('online',()=>{updateNetBadge();if(cloudReady)cloudPush();});
-window.addEventListener('offline',net);
-net();
+const net=()=>{const b=document.getElementById('netBadge');b.textContent=navigator.onLine?'ONLINE':'OFFLINE';b.style.background=navigator.onLine?'rgba(255,255,255,0.2)':'rgba(239,68,68,0.4)';};
+window.addEventListener('online',net);window.addEventListener('offline',net);net();
 window.addEventListener('resize',fitTableRows);
 window.addEventListener('orientationchange',()=>setTimeout(fitTableRows,350));
 document.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();enterValue();}});
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-
-// ========================= 👷 PHÂN QUYỀN + ☁ ĐỒNG BỘ THỜI GIAN THỰC =========================
-const firebaseConfig={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
-let myRole='lai',myEmployeeId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
-const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
-
-function updateNetBadge(){
-  const b=document.getElementById('netBadge');if(!b)return;
-  if(!navigator.onLine){b.textContent='📴 Offline (lưu tạm máy)';b.style.background='rgba(239,68,68,.4)';return;}
-  if(!cloudReady){b.textContent='ONLINE';b.style.background='rgba(255,255,255,.2)';return;}
-  if(cloudSyncState==='syncing'){b.textContent='🔄 Đang đồng bộ...';b.style.background='rgba(245,158,11,.35)';return;}
-  if(cloudSyncState==='error'){b.textContent='⚠️ Lỗi đồng bộ';b.style.background='rgba(239,68,68,.35)';return;}
-  b.textContent='✅ Đã đồng bộ';b.style.background='rgba(34,197,94,.3)';
-}
-
-function initCloudAndRole(){
-  try{ if(!firebase.apps.length) firebase.initializeApp(firebaseConfig); }catch(e){console.warn('firebase init',e);}
-  const savedRole=localStorage.getItem('lai_role');
-  const savedEmpId=localStorage.getItem('lai_emp_id');
-  if(savedRole==='lai'){myRole='lai';enterApp();}
-  else if(savedRole==='nv'&&savedEmpId){myRole='nv';myEmployeeId=savedEmpId;enterApp();}
-  else showRoleGate();
-}
-
-function showRoleGate(msg){
-  let g=document.getElementById('roleGate');
-  if(!g){
-    g=document.createElement('div');g.id='roleGate';
-    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;';
-    g.innerHTML=`<div style="font-size:44px">🦐</div><h2 style="color:var(--text)">Sổ Cân Tôm • Lái</h2>
-      <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
-        <button class="btn" onclick="chooseRoleLai()">👑 Tôi là Lái (chủ)</button>
-        <div style="text-align:center;color:var(--muted);font-size:12px">— hoặc —</div>
-        <input id="empCodeInput" placeholder="Nhập mã nhân viên" style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase">
-        <button class="btn ghost" onclick="chooseRoleEmployee()">👤 Vào với mã nhân viên</button>
-        <div id="roleErr" style="color:var(--danger);font-size:13px;text-align:center;min-height:18px"></div>
-      </div>`;
-    document.body.appendChild(g);
-  }
-  const err=document.getElementById('roleErr');if(err)err.textContent=msg||'';
-}
-
-function chooseRoleLai(){
-  localStorage.setItem('lai_role','lai');myRole='lai';
-  const g=document.getElementById('roleGate');if(g)g.remove();
-  enterApp();
-}
-
-function chooseRoleEmployee(){
-  const code=(document.getElementById('empCodeInput').value||'').trim().toUpperCase();
-  if(!code){showRoleGate('Nhập mã nhân viên');return;}
-  showRoleGate('Đang kiểm tra mã...');
-  firebase.auth().signInAnonymously().then(()=>firebase.firestore().collection('shared').doc('employees').get()).then(snap=>{
-    const list=(snap.exists?snap.data().list:[])||[];
-    const emp=list.find(x=>x.code===code&&x.active!==false);
-    if(!emp){showRoleGate('❌ Mã không đúng hoặc đã bị khoá. Hỏi lại lái tôm.');return;}
-    localStorage.setItem('lai_role','nv');localStorage.setItem('lai_emp_id',emp.id);
-    myRole='nv';myEmployeeId=emp.id;
-    const g=document.getElementById('roleGate');if(g)g.remove();
-    enterApp();
-  }).catch(err=>{showRoleGate('❌ Lỗi mạng: '+err.message+' — thử lại khi có sóng.');});
-}
-
-function enterApp(){
-  mainTab=(myRole==='nv')?'tin':'bang';
-  render();applyRoleNav();checkReminders();updateNetBadge();
-  firebase.auth().signInAnonymously().then(()=>{
-    cloudReady=true;cloudListen();updateNetBadge();
-    if(myRole==='lai'){
-      firebase.firestore().collection('shared').doc('tin').get().then(snap=>{
-        if(!snap.exists)cloudPush(); // lần đầu bật đồng bộ: đẩy dữ liệu sẵn có trên máy lái lên làm gốc
-      });
-    }
-  }).catch(err=>{console.warn(err);cloudSyncState='error';updateNetBadge();});
-}
-
-function cloudPush(){
-  if(!cloudReady||suppressCloudPush)return;
-  clearTimeout(cloudPushTimer);
-  cloudSyncState='syncing';updateNetBadge();
-  cloudPushTimer=setTimeout(()=>{
-    const fs=firebase.firestore();
-    const jobs=SYNC_COLLECTIONS.map(name=>{
-      let list=db[name]||[];
-      if(name==='sheets')list=list.map(s=>{const c=Object.assign({},s);delete c.photos;return c;});
-      return fs.collection('shared').doc(name).set({list,updatedAt:Date.now()});
-    });
-    jobs.push(fs.collection('shared').doc('employees').set({list:db.employees||[],updatedAt:Date.now()}));
-    Promise.all(jobs).then(()=>{cloudSyncState='synced';updateNetBadge();}).catch(()=>{cloudSyncState='error';updateNetBadge();});
-  },600); // gộp các thay đổi liên tiếp lại thành 1 lần đẩy, đỡ tốn lượt ghi
-}
-
-function cloudListen(){
-  if(cloudListening)return;cloudListening=true;
-  const fs=firebase.firestore();
-  SYNC_COLLECTIONS.concat(['employees']).forEach(name=>{
-    fs.collection('shared').doc(name).onSnapshot(snap=>{
-      if(!snap.exists)return;
-      const remote=(snap.data()||{}).list||[];
-      suppressCloudPush=true;
-      if(name==='sheets'){
-        remote.forEach(rs=>{
-          const local=db.sheets.find(x=>x.id===rs.id);
-          if(local)Object.assign(local,rs,{photos:local.photos||[]});
-          else db.sheets.push(Object.assign({photos:[]},rs));
-        });
-      }else{
-        db[name]=remote;
-      }
-      suppressCloudPush=false;
-      save(true);cloudSyncState='synced';updateNetBadge();render();
-    },err=>{console.warn('sync '+name,err);cloudSyncState='error';updateNetBadge();});
-  });
-}
 </script>
 </body>
 </html>

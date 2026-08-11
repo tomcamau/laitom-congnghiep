@@ -1171,13 +1171,22 @@ function chooseRoleLai(){
     const g=document.getElementById('roleGate');if(g)g.remove();
     enterApp();
   }).catch(err=>{
-    if(err.code==='auth/user-not-found'){
-      // Lần đầu — tự tạo tài khoản với đúng số điện thoại + mật khẩu vừa nhập
+    // Bản Firebase mới gộp chung "chưa có tài khoản" và "sai mật khẩu" thành 1 mã lỗi
+    // (invalid-credential / invalid-login-credentials) — nên cứ thử tạo tài khoản mới;
+    // nếu tạo thất bại vì "đã tồn tại" thì lúc đó mới chắc chắn là sai mật khẩu.
+    const looksLikeFirstTime=['auth/user-not-found','auth/invalid-credential','auth/invalid-login-credentials'].includes(err.code);
+    if(looksLikeFirstTime){
       auth.createUserWithEmailAndPassword(fakeEmail,pass).then(()=>{
         localStorage.setItem('lai_role','lai');myRole='lai';
         const g=document.getElementById('roleGate');if(g)g.remove();
         enterApp();
-      }).catch(err2=>showRoleGate('❌ Lỗi tạo tài khoản: '+err2.message));
+      }).catch(err2=>{
+        if(err2.code==='auth/email-already-in-use'){
+          showRoleGate('❌ Số điện thoại này đã có tài khoản — sai mật khẩu, kiểm tra lại và thử tiếp.');
+        }else{
+          showRoleGate('❌ Lỗi tạo tài khoản: '+err2.message);
+        }
+      });
     }else if(err.code==='auth/wrong-password'){
       showRoleGate('❌ Sai mật khẩu cho số điện thoại này.');
     }else{

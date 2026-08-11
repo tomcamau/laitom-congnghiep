@@ -246,6 +246,7 @@ let mauKgV='',mauConV='';
 let quotaWarned=false;
 // Khai báo sớm để tránh lỗi "dùng biến trước khi gán" — các hàm phía dưới cần đến các biến này
 const firebaseConfig={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
+const LAI_PIN='2468'; // ⚠️ Đổi mã này thành mã riêng của bạn trước khi phát cho nhân viên — chỉ Lái mới nên biết
 let myRole='lai',myEmployeeId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
 const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
 
@@ -1147,6 +1148,9 @@ function showRoleGate(msg){
 }
 
 function chooseRoleLai(){
+  const pin=prompt('🔒 Nhập mã PIN của Lái:');
+  if(pin===null)return;
+  if(pin!==LAI_PIN){showRoleGate('❌ Sai mã PIN — không phải Lái thì chọn "Nhập mã nhân viên" bên dưới.');return;}
   localStorage.setItem('lai_role','lai');myRole='lai';
   const g=document.getElementById('roleGate');if(g)g.remove();
   enterApp();

@@ -246,7 +246,7 @@ let mauKgV='',mauConV='';
 let quotaWarned=false;
 // Khai báo sớm để tránh lỗi "dùng biến trước khi gán" — các hàm phía dưới cần đến các biến này
 const firebaseConfig={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
-let myRole='lai',myEmployeeId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
+let myRole='lai',myEmployeeId=null,myTenantId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
 const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
 
 function save(skipCloud){try{localStorage.setItem(KEY,JSON.stringify(db));}catch(e){if(!quotaWarned){quotaWarned=true;alert('⚠️ Bộ nhớ đầy! Xóa bớt ảnh hoặc sao lưu rồi dọn dữ liệu cũ.');}}if(!skipCloud)cloudPush();}
@@ -887,36 +887,55 @@ function printDoiChieu(id){
 
 // ===== 🏭 BÁN =====
 const TT=['Đặt ao','Đang cân','Giao NM','Tất toán'];
+let expandedChuyenId=null;
+function toggleChuyenCard(id){expandedChuyenId=(expandedChuyenId===id)?null:id;vib();render();}
+
 function renderBan(){
-  return`<button class="btn ghost" onclick="newChuyen()">＋ Chuyến mới</button><p class="hint" style="margin-top:6px">Mỗi chuyến = 1 xe tôm: mua ao → giao NM → lãi/lỗ.</p>`+
+  if(expandedChuyenId===null&&db.active)expandedChuyenId=db.active; // mặc định mở sẵn chuyến đang hoạt động
+  return`<button class="btn ghost" onclick="newChuyen()">＋ Chuyến mới</button><p class="hint" style="margin-top:6px">Mỗi chuyến = 1 xe tôm: mua ao → giao NM → lãi/lỗ. Bấm vào từng chuyến để xổ ra xem/nhập, bấm lần nữa để thu gọn.</p>`+
   db.chuyen.map(c=>{
     const s=cStats(c);
     const nmNo=(c.nmTien||0)-(c.nmDaTra||0);
-    return`<div class="card" style="margin-top:8px">
-      <h3>🚚 ${esc(c.ten)} ${c.id===db.active?'🟢':''} <span class="x" style="float:right" onclick="delChuyen('${c.id}')">✕</span></h3>
-      <div class="step"><b class="n">1</b>MUA TẠI AO — ${s.ps.length} phiếu • <b>${fkg(s.kg)} kg</b> • ${fmt(s.tien)} đ${s.chiPhiAo>0?`<br><small>💰 CP tại ao: ${fmt(s.chiPhiAo)} đ</small>`:''}<details><summary>xem phiếu</summary>${s.ps.map(p=>`<div style="padding:3px 0;font-size:12px">• ${esc(kTen(p.khachId))} ${p.loai==='su'?'sú':'thẻ'} sz${p.size} ${fkg(p.kg)}kg ${p.giaRieng?'(giá riêng)':'@'+fmt(p.gia)}</div>`).join('')||'<i>trống</i>'}</details></div>
-      <div class="step"><b class="n">2</b>GIAO NHÀ MÁY — nhập sau khi giao xong
-        <label>Chi phí chuyến (đá, dầu, công...)</label>
-        <input type="number" value="${c.chiPhi||''}" placeholder="vd: 500000" onchange="updChuyen('${c.id}','chiPhi',this.value)">
-        <label>Cò (hoa hồng đ/kg)</label>
-        <select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select>
-        ${c.coId?`<div style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"><label style="margin:0">✔ Đã trả hoa hồng cò</label></div>`:''}
-        <label>⚖️ Kg nhà máy cân nhận</label>
-        <input type="number" value="${c.nmKg||''}" placeholder="vd: 37.5 — xem phiếu cân NM" onchange="updChuyen('${c.id}','nmKg',this.value)">
-        <label>🏷️ Giá NM mua (đ/kg)</label>
-        <input type="number" value="${c.giaNM||''}" placeholder="vd: 160000" onchange="updGiaNM('${c.id}',this.value)">
-        <label>💵 Tổng tiền NM trả (đ)</label>
-        <input type="number" value="${c.nmTien||''}" placeholder="tự tính = giá × kg, sửa được" onchange="updChuyen('${c.id}','nmTien',this.value)">
-        ${c.nmKg?`<div class="hint">NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+' đ/kg':''} → ${fmt(c.nmTien)} đ</div>`:''}
-        ${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:4px"><span>💵 NM đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">NM nợ: ${fmt(nmNo)}đ</span></div><button class="btn small" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}
+    const isOpen=expandedChuyenId===c.id;
+    const stageTag=TT[c.tt]||'';
+    return`<div class="card" style="margin-top:8px;padding:0;overflow:hidden;">
+      <div class="toggle-header" onclick="toggleChuyenCard('${c.id}')" style="border-radius:${isOpen?'10px 10px 0 0':'10px'};">
+        <span class="label">🚚 ${esc(c.ten)} ${c.id===db.active?'🟢':''}</span>
+        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+          <span class="tag ${c.tt===3?'ok':'new'}" style="white-space:nowrap;">${stageTag}</span>
+          <b style="font-size:13px;color:var(--accent);white-space:nowrap;">${fkg(s.kg)}kg</b>
+          ${s.loi!=null?`<b style="font-size:13px;white-space:nowrap;color:${s.loi<0?'var(--danger)':'var(--ok)'}">${s.loi>=0?'+':''}${fmt(s.loi)}đ</b>`:''}
+          <span class="arrow" style="display:inline-block;transition:transform .2s;transform:rotate(${isOpen?'180':'0'}deg);">▼</span>
+        </span>
       </div>
-      <div class="step"><b class="n">3</b>KẾT QUẢ: ${kqText(s)}</div>
-      ${c.tt<3?`<button class="btn small" onclick="nextTT('${c.id}')">▶ ${TT[c.tt+1]}</button>`:'<span class="tag ok">Đã tất toán ✅</span>'}
-      <button class="btn small ghost" onclick="shareChuyen('${c.id}')">📤 Gửi Zalo</button>
+      ${isOpen?`<div style="padding:10px 12px;">
+        <div class="step"><b class="n">1</b>MUA TẠI AO — ${s.ps.length} phiếu • <b>${fkg(s.kg)} kg</b> • ${fmt(s.tien)} đ${s.chiPhiAo>0?`<br><small>💰 CP tại ao: ${fmt(s.chiPhiAo)} đ</small>`:''}<details><summary>xem phiếu</summary>${s.ps.map(p=>`<div style="padding:3px 0;font-size:12px">• ${esc(kTen(p.khachId))} ${p.loai==='su'?'sú':'thẻ'} sz${p.size} ${fkg(p.kg)}kg ${p.giaRieng?'(giá riêng)':'@'+fmt(p.gia)}</div>`).join('')||'<i>trống</i>'}</details></div>
+        <div class="step"><b class="n">2</b>GIAO NHÀ MÁY — nhập sau khi giao xong
+          <label>Chi phí chuyến (đá, dầu, công...)</label>
+          <input type="number" value="${c.chiPhi||''}" placeholder="vd: 500000" onchange="updChuyen('${c.id}','chiPhi',this.value)">
+          <label>Cò (hoa hồng đ/kg)</label>
+          <select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select>
+          ${c.coId?`<div style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"><label style="margin:0">✔ Đã trả hoa hồng cò</label></div>`:''}
+          <label>⚖️ Kg nhà máy cân nhận</label>
+          <input type="number" value="${c.nmKg||''}" placeholder="vd: 37.5 — xem phiếu cân NM" onchange="updChuyen('${c.id}','nmKg',this.value)">
+          <label>🏷️ Giá NM mua (đ/kg)</label>
+          <input type="number" value="${c.giaNM||''}" placeholder="vd: 160000" onchange="updGiaNM('${c.id}',this.value)">
+          <label>💵 Tổng tiền NM trả (đ)</label>
+          <input type="number" value="${c.nmTien||''}" placeholder="tự tính = giá × kg, sửa được" onchange="updChuyen('${c.id}','nmTien',this.value)">
+          ${c.nmKg?`<div class="hint">NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+' đ/kg':''} → ${fmt(c.nmTien)} đ</div>`:''}
+          ${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:4px"><span>💵 NM đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">NM nợ: ${fmt(nmNo)}đ</span></div><button class="btn small" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}
+        </div>
+        <div class="step"><b class="n">3</b>KẾT QUẢ: ${kqText(s)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          ${c.tt<3?`<button class="btn small" onclick="nextTT('${c.id}')">▶ ${TT[c.tt+1]}</button>`:'<span class="tag ok">Đã tất toán ✅</span>'}
+          <button class="btn small ghost" onclick="shareChuyen('${c.id}')">📤 Gửi Zalo</button>
+          <button class="btn small danger" onclick="delChuyen('${c.id}')">🗑 Xoá chuyến</button>
+        </div>
+      </div>`:''}
     </div>`;
   }).join('');
 }
-function newChuyen(){const ten=prompt('Tên chuyến','Chuyến '+new Date().toLocaleDateString('vi-VN'));if(ten){db.chuyen.unshift({id:uid(),ten,ngay:today(),tt:0,chiPhi:0,nmKg:0,nmTien:0,nmDaTra:0,giaNM:0,coId:null,coDaTra:false,logs:[{ts:Date.now(),msg:'Tạo chuyến'}]});db.active=db.chuyen[0].id;save();render();}}
+function newChuyen(){const ten=prompt('Tên chuyến','Chuyến '+new Date().toLocaleDateString('vi-VN'));if(ten){db.chuyen.unshift({id:uid(),ten,ngay:today(),tt:0,chiPhi:0,nmKg:0,nmTien:0,nmDaTra:0,giaNM:0,coId:null,coDaTra:false,logs:[{ts:Date.now(),msg:'Tạo chuyến'}]});db.active=db.chuyen[0].id;expandedChuyenId=db.active;save();render();}}
 function updChuyen(id,f,v){const c=db.chuyen.find(x=>x.id===id);if(f==='coId')c[f]=v;else if(f==='coDaTra')c[f]=!!v;else c[f]=+v||0;if(f==='nmKg'&&c.giaNM)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
 function updGiaNM(id,v){const c=db.chuyen.find(x=>x.id===id);c.giaNM=+v||0;if(c.giaNM&&c.nmKg)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
 function thuTienNM(id){const c=db.chuyen.find(x=>x.id===id);const no=(c.nmTien||0)-(c.nmDaTra||0);const t=+prompt(`Số tiền NM trả đợt này (còn nợ ${fmt(no)}đ):`);if(t>0){c.nmDaTra=(c.nmDaTra||0)+t;c.logs.push({ts:Date.now(),msg:'NM trả '+fmt(t)+'đ'});save();vib();render();}}
@@ -936,7 +955,9 @@ function renderSo(){
     <button onclick="soSub='gia';render()">💰<br>Bảng giá</button>
     <button onclick="soSub='co';render()">🤝<br>Cò</button>
     <button onclick="soSub='nv';render()">👷<br>Nhân viên</button>
-    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>`:`<button onclick="openRemindersList()">🔔<br>Nhắc hẹn</button>`}
+    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>
+    <button onclick="soSub='account';render()">⚙️<br>Tài khoản</button>`:`<button onclick="openRemindersList()">🔔<br>Nhắc hẹn</button>
+    <button onclick="doSignOut()">🚪<br>Đăng xuất</button>`}
   </div>`;
   if(soSub==='khach')return soKhach();
   if(soSub==='pay')return soPay();
@@ -945,7 +966,19 @@ function renderSo(){
   if(soSub==='gia')return soGia();
   if(soSub==='co')return soCo();
   if(soSub==='nv')return soNhanVien();
+  if(soSub==='account')return soAccount();
   return soData();
+}
+function soAccount(){
+  const phone=currentLaiPhone();
+  return backBtn+`<div class="card" style="margin-top:8px;">
+    <h3>⚙️ Tài khoản Lái</h3>
+    <label>Số điện thoại đang đăng nhập</label>
+    <input value="${esc(phone)}" disabled>
+    <button class="btn small ghost" onclick="changeLaiPassword()">🔑 Đổi mật khẩu</button>
+    <button class="btn small ghost" onclick="changeLaiPhone()">📱 Đổi số điện thoại</button>
+    <button class="btn small danger" onclick="doSignOut()">🚪 Đăng xuất khỏi máy này</button>
+  </div>`;
 }
 function myEmployeeName(){const e=(db.employees||[]).find(x=>x.id===myEmployeeId);return e?e.name:'Nhân viên';}
 function soNhanVien(){
@@ -975,13 +1008,33 @@ function soNhanVien(){
 function addEmployee(){
   const name=prompt('Tên nhân viên:');if(!name||!name.trim())return;
   const code=Math.random().toString(36).substring(2,8).toUpperCase();
+  const empId=uid();
   db.employees=db.employees||[];
-  db.employees.push({id:uid(),name:name.trim(),code,active:true,createdAt:Date.now()});
+  db.employees.push({id:empId,name:name.trim(),code,active:true,createdAt:Date.now()});
   save();render();
+  // Ghi vào bảng tra cứu toàn cục để nhân viên gõ mã là tự tìm đúng "phòng dữ liệu" của Lái này
+  if(typeof firebase!=='undefined'&&cloudReady&&myTenantId){
+    firebase.firestore().collection('employeeCodes').doc(code).set({tenantId:myTenantId,employeeId:empId,active:true,createdAt:Date.now()}).catch(err=>console.warn('Lỗi đăng ký mã nhân viên lên mây:',err));
+  }
   alert('✅ Đã tạo mã cho '+name.trim()+':\n\n'+code+'\n\nĐưa mã này cho nhân viên nhập lúc mở app lần đầu trên máy của họ.');
 }
-function toggleEmployee(id){const e=db.employees.find(x=>x.id===id);if(e){e.active=e.active===false?true:false;save();render();}}
-function delEmployee(id){if(confirm('Xoá nhân viên này? Các ao đang gán cho họ sẽ về "chưa gán".')){db.tin.forEach(t=>{if(t.assignedTo===id)t.assignedTo=null;});db.employees=(db.employees||[]).filter(x=>x.id!==id);save();render();}}
+function toggleEmployee(id){
+  const e=db.employees.find(x=>x.id===id);if(!e)return;
+  e.active=e.active===false?true:false;save();render();
+  if(typeof firebase!=='undefined'&&cloudReady&&myTenantId){
+    firebase.firestore().collection('employeeCodes').doc(e.code).set({tenantId:myTenantId,employeeId:e.id,active:e.active,createdAt:Date.now()},{merge:true}).catch(()=>{});
+  }
+}
+function delEmployee(id){
+  if(!confirm('Xoá nhân viên này? Các ao đang gán cho họ sẽ về "chưa gán".'))return;
+  const e=db.employees.find(x=>x.id===id);
+  db.tin.forEach(t=>{if(t.assignedTo===id)t.assignedTo=null;});
+  db.employees=(db.employees||[]).filter(x=>x.id!==id);
+  save();render();
+  if(e&&typeof firebase!=='undefined'&&cloudReady){
+    firebase.firestore().collection('employeeCodes').doc(e.code).delete().catch(()=>{});
+  }
+}
 function assignTin(id,empId){const t=db.tin.find(x=>x.id===id);if(t){t.assignedTo=empId||null;save();render();}}
 function afterSoRender(){if(soSub==='khach'&&!selKhach)renderKhachList();}
 const backBtn=`<button class="btn ghost" onclick="soSub=null;selKhach=null;render()">← Quay lại SỔ</button>`;
@@ -1123,8 +1176,9 @@ function initCloudAndRole(){
   try{ if(!firebase.apps.length) firebase.initializeApp(firebaseConfig); }catch(e){console.warn('firebase init',e);}
   const savedRole=localStorage.getItem('lai_role');
   const savedEmpId=localStorage.getItem('lai_emp_id');
-  if(savedRole==='lai'){myRole='lai';enterApp();}
-  else if(savedRole==='nv'&&savedEmpId){myRole='nv';myEmployeeId=savedEmpId;enterApp();}
+  const savedTenantId=localStorage.getItem('lai_tenant_id');
+  if(savedRole==='lai'){myRole='lai';myTenantId=savedTenantId||null;enterApp();}
+  else if(savedRole==='nv'&&savedEmpId&&savedTenantId){myRole='nv';myEmployeeId=savedEmpId;myTenantId=savedTenantId;enterApp();}
   else showRoleGate();
 }
 
@@ -1157,6 +1211,54 @@ function phoneToFakeEmail(phone){
   return digits+'@socantom-lai.local';
 }
 
+function currentLaiPhone(){
+  const user=(typeof firebase!=='undefined'&&firebase.auth)?firebase.auth().currentUser:null;
+  if(!user||!user.email)return '(chưa rõ)';
+  return user.email.split('@')[0];
+}
+
+function doSignOut(){
+  if(!confirm('Đăng xuất khỏi thiết bị này? Lần sau cần đăng nhập lại.'))return;
+  localStorage.removeItem('lai_role');
+  localStorage.removeItem('lai_emp_id');
+  localStorage.removeItem('lai_tenant_id');
+  if(typeof firebase!=='undefined'&&firebase.auth){firebase.auth().signOut().catch(()=>{});}
+  location.reload();
+}
+
+function reauthLai(currentPass){
+  const user=firebase.auth().currentUser;
+  if(!user||!user.email)return Promise.reject(new Error('Chưa đăng nhập'));
+  const cred=firebase.auth.EmailAuthProvider.credential(user.email,currentPass);
+  return user.reauthenticateWithCredential(cred);
+}
+
+function changeLaiPassword(){
+  if(typeof firebase==='undefined'){alert('❌ Chưa kết nối mạng, thử lại sau.');return;}
+  const cur=prompt('🔒 Nhập mật khẩu hiện tại để xác nhận:');
+  if(!cur)return;
+  const np=prompt('🔑 Nhập mật khẩu mới (ít nhất 6 ký tự):');
+  if(!np||np.length<6){alert('Mật khẩu mới cần ít nhất 6 ký tự.');return;}
+  reauthLai(cur).then(()=>firebase.auth().currentUser.updatePassword(np)).then(()=>{
+    alert('✅ Đã đổi mật khẩu thành công.');
+  }).catch(err=>alert('❌ Lỗi: '+(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential'?'Sai mật khẩu hiện tại.':err.message)));
+}
+
+function changeLaiPhone(){
+  if(typeof firebase==='undefined'){alert('❌ Chưa kết nối mạng, thử lại sau.');return;}
+  const cur=prompt('🔒 Nhập mật khẩu hiện tại để xác nhận:');
+  if(!cur)return;
+  const newPhone=prompt('📱 Nhập số điện thoại mới:');
+  if(!newPhone||newPhone.replace(/\D/g,'').length<9){alert('Số điện thoại không hợp lệ.');return;}
+  reauthLai(cur).then(()=>firebase.auth().currentUser.updateEmail(phoneToFakeEmail(newPhone))).then(()=>{
+    alert('✅ Đã đổi số điện thoại thành công. Lần sau đăng nhập bằng số mới.');render();
+  }).catch(err=>{
+    if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential')alert('❌ Sai mật khẩu hiện tại.');
+    else if(err.code==='auth/email-already-in-use')alert('❌ Số điện thoại này đã được dùng cho tài khoản khác.');
+    else alert('❌ Lỗi: '+err.message);
+  });
+}
+
 function chooseRoleLai(){
   const phone=(document.getElementById('laiPhone').value||'').trim();
   const pass=(document.getElementById('laiPass').value||'').trim();
@@ -1166,21 +1268,21 @@ function chooseRoleLai(){
   showRoleGate('Đang xử lý...');
   const fakeEmail=phoneToFakeEmail(phone);
   const auth=firebase.auth();
-  auth.signInWithEmailAndPassword(fakeEmail,pass).then(()=>{
-    localStorage.setItem('lai_role','lai');myRole='lai';
+  const finish=()=>{
+    // Mỗi Lái = 1 UID riêng của chính họ = "phòng dữ liệu" riêng, không cần giữ chỗ gì cả
+    myTenantId=auth.currentUser.uid;
+    localStorage.setItem('lai_role','lai');localStorage.setItem('lai_tenant_id',myTenantId);
+    myRole='lai';
     const g=document.getElementById('roleGate');if(g)g.remove();
     enterApp();
-  }).catch(err=>{
+  };
+  auth.signInWithEmailAndPassword(fakeEmail,pass).then(finish).catch(err=>{
     // Bản Firebase mới gộp chung "chưa có tài khoản" và "sai mật khẩu" thành 1 mã lỗi
     // (invalid-credential / invalid-login-credentials) — nên cứ thử tạo tài khoản mới;
     // nếu tạo thất bại vì "đã tồn tại" thì lúc đó mới chắc chắn là sai mật khẩu.
     const looksLikeFirstTime=['auth/user-not-found','auth/invalid-credential','auth/invalid-login-credentials'].includes(err.code);
     if(looksLikeFirstTime){
-      auth.createUserWithEmailAndPassword(fakeEmail,pass).then(()=>{
-        localStorage.setItem('lai_role','lai');myRole='lai';
-        const g=document.getElementById('roleGate');if(g)g.remove();
-        enterApp();
-      }).catch(err2=>{
+      auth.createUserWithEmailAndPassword(fakeEmail,pass).then(finish).catch(err2=>{
         if(err2.code==='auth/email-already-in-use'){
           showRoleGate('❌ Số điện thoại này đã có tài khoản — sai mật khẩu, kiểm tra lại và thử tiếp.');
         }else{
@@ -1201,15 +1303,16 @@ function chooseRoleEmployee(){
   showRoleGate('Đang kiểm tra mã...');
   if(typeof firebase==='undefined'){showRoleGate('❌ Không tải được kết nối mạng. Kiểm tra internet rồi thử lại.');return;}
   try{
-    firebase.auth().signInAnonymously().then(()=>firebase.firestore().collection('shared').doc('employees').get()).then(snap=>{
-      const list=(snap.exists?snap.data().list:[])||[];
-      const emp=list.find(x=>x.code===code&&x.active!==false);
-      if(!emp){showRoleGate('❌ Mã không đúng hoặc đã bị khoá. Hỏi lại lái tôm.');return;}
-      localStorage.setItem('lai_role','nv');localStorage.setItem('lai_emp_id',emp.id);
-      myRole='nv';myEmployeeId=emp.id;
-      const g=document.getElementById('roleGate');if(g)g.remove();
-      enterApp();
-    }).catch(err=>{showRoleGate('❌ Lỗi mạng: '+err.message+' — thử lại khi có sóng.');});
+    firebase.auth().signInAnonymously()
+      .then(()=>firebase.firestore().collection('employeeCodes').doc(code).get())
+      .then(codeSnap=>{
+        if(!codeSnap.exists||codeSnap.data().active===false){showRoleGate('❌ Mã không đúng hoặc đã bị khoá. Hỏi lại lái tôm.');return;}
+        const tenantId=codeSnap.data().tenantId,empId=codeSnap.data().employeeId;
+        localStorage.setItem('lai_role','nv');localStorage.setItem('lai_emp_id',empId);localStorage.setItem('lai_tenant_id',tenantId);
+        myRole='nv';myEmployeeId=empId;myTenantId=tenantId;
+        const g=document.getElementById('roleGate');if(g)g.remove();
+        enterApp();
+      }).catch(err=>{showRoleGate('❌ Lỗi mạng: '+err.message+' — thử lại khi có sóng.');});
   }catch(err){showRoleGate('❌ Lỗi kết nối: '+err.message);}
 }
 
@@ -1221,7 +1324,7 @@ function enterApp(){
     const afterAuth=()=>{
       cloudReady=true;cloudListen();updateNetBadge();
       if(myRole==='lai'){
-        firebase.firestore().collection('shared').doc('tin').get().then(snap=>{
+        firebase.firestore().collection('tenants').doc(myTenantId).collection('data').doc('tin').get().then(snap=>{
           if(!snap.exists)cloudPush(); // lần đầu bật đồng bộ: đẩy dữ liệu sẵn có trên máy lái lên làm gốc
         });
       }
@@ -1231,9 +1334,12 @@ function enterApp(){
       // Chỉ chờ Firebase xác nhận lại trạng thái đăng nhập (tự khôi phục từ phiên trước nếu có).
       const unsub=firebase.auth().onAuthStateChanged(user=>{
         unsub();
-        if(user)afterAuth();
-        else{ // phiên cũ hết hạn hoặc chưa từng đăng nhập ở máy này — quay lại màn hình đăng nhập
-          localStorage.removeItem('lai_role');
+        if(user){
+          myTenantId=user.uid; // tenant của Lái luôn = đúng UID của chính họ
+          localStorage.setItem('lai_tenant_id',myTenantId);
+          afterAuth();
+        }else{ // phiên cũ hết hạn hoặc chưa từng đăng nhập ở máy này — quay lại màn hình đăng nhập
+          localStorage.removeItem('lai_role');localStorage.removeItem('lai_tenant_id');
           showRoleGate('Phiên đăng nhập đã hết — vui lòng đăng nhập lại.');
         }
       });
@@ -1247,27 +1353,29 @@ function enterApp(){
   }
 }
 
+function tenantDoc(name){
+  return firebase.firestore().collection('tenants').doc(myTenantId).collection('data').doc(name);
+}
+
 function cloudPush(){
-  if(!cloudReady||suppressCloudPush)return;
+  if(!cloudReady||suppressCloudPush||!myTenantId)return;
   clearTimeout(cloudPushTimer);
   cloudSyncState='syncing';updateNetBadge();
   cloudPushTimer=setTimeout(()=>{
-    const fs=firebase.firestore();
     const jobs=SYNC_COLLECTIONS.map(name=>{
       let list=db[name]||[];
       if(name==='sheets')list=list.map(s=>{const c=Object.assign({},s);delete c.photos;return c;});
-      return fs.collection('shared').doc(name).set({list,updatedAt:Date.now()});
+      return tenantDoc(name).set({list,updatedAt:Date.now()});
     });
-    jobs.push(fs.collection('shared').doc('employees').set({list:db.employees||[],updatedAt:Date.now()}));
+    jobs.push(tenantDoc('employees').set({list:db.employees||[],updatedAt:Date.now()}));
     Promise.all(jobs).then(()=>{cloudSyncState='synced';updateNetBadge();}).catch(()=>{cloudSyncState='error';updateNetBadge();});
   },600); // gộp các thay đổi liên tiếp lại thành 1 lần đẩy, đỡ tốn lượt ghi
 }
 
 function cloudListen(){
-  if(cloudListening)return;cloudListening=true;
-  const fs=firebase.firestore();
+  if(cloudListening||!myTenantId)return;cloudListening=true;
   SYNC_COLLECTIONS.concat(['employees']).forEach(name=>{
-    fs.collection('shared').doc(name).onSnapshot(snap=>{
+    tenantDoc(name).onSnapshot(snap=>{
       if(!snap.exists)return;
       const remote=(snap.data()||{}).list||[];
       suppressCloudPush=true;

@@ -908,28 +908,44 @@ function renderBan(){
           <span class="arrow" style="display:inline-block;transition:transform .2s;transform:rotate(${isOpen?'180':'0'}deg);">▼</span>
         </span>
       </div>
-      ${isOpen?`<div style="padding:10px 12px;">
-        <div class="step"><b class="n">1</b>MUA TẠI AO — ${s.ps.length} phiếu • <b>${fkg(s.kg)} kg</b> • ${fmt(s.tien)} đ${s.chiPhiAo>0?`<br><small>💰 CP tại ao: ${fmt(s.chiPhiAo)} đ</small>`:''}<details><summary>xem phiếu</summary>${s.ps.map(p=>`<div style="padding:3px 0;font-size:12px">• ${esc(kTen(p.khachId))} ${p.loai==='su'?'sú':'thẻ'} sz${p.size} ${fkg(p.kg)}kg ${p.giaRieng?'(giá riêng)':'@'+fmt(p.gia)}</div>`).join('')||'<i>trống</i>'}</details></div>
-        <div class="step"><b class="n">2</b>GIAO NHÀ MÁY — nhập sau khi giao xong
-          <label>Chi phí chuyến (đá, dầu, công...)</label>
-          <input type="number" value="${c.chiPhi||''}" placeholder="vd: 500000" onchange="updChuyen('${c.id}','chiPhi',this.value)">
-          <label>Cò (hoa hồng đ/kg)</label>
-          <select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select>
-          ${c.coId?`<div style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"><label style="margin:0">✔ Đã trả hoa hồng cò</label></div>`:''}
-          <label>⚖️ Kg nhà máy cân nhận</label>
-          <input type="number" value="${c.nmKg||''}" placeholder="vd: 37.5 — xem phiếu cân NM" onchange="updChuyen('${c.id}','nmKg',this.value)">
-          <label>🏷️ Giá NM mua (đ/kg)</label>
-          <input type="number" value="${c.giaNM||''}" placeholder="vd: 160000" onchange="updGiaNM('${c.id}',this.value)">
+      ${isOpen?`<div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="background:var(--panel);border-radius:8px;padding:8px 10px;">
+          <div class="row-flex" style="border:0;padding:0;">
+            <span style="font-weight:700;font-size:13px;color:var(--muted);">🛒 ĐÃ MUA TẠI AO</span>
+            <span style="font-size:13px;"><b>${fkg(s.kg)}kg</b> • ${fmt(s.tien)}đ</span>
+          </div>
+          ${s.chiPhiAo>0?`<div class="hint" style="margin:2px 0 0;">💰 Chi phí tại ao: ${fmt(s.chiPhiAo)} đ</div>`:''}
+          <details><summary style="font-size:12px;color:var(--accent);cursor:pointer;margin-top:2px;">${s.ps.length} phiếu — xem chi tiết</summary>${s.ps.map(p=>`<div style="padding:3px 0;font-size:12px">• ${esc(kTen(p.khachId))} ${p.loai==='su'?'sú':'thẻ'} sz${p.size} ${fkg(p.kg)}kg ${p.giaRieng?'(giá riêng)':'@'+fmt(p.gia)}</div>`).join('')||'<i>trống</i>'}</details>
+        </div>
+
+        <div style="background:var(--accent-bg);border:1px solid var(--accent);border-radius:8px;padding:8px 10px;">
+          <div style="font-weight:700;font-size:13px;color:var(--accent);margin-bottom:4px;">🏭 GIAO NHÀ MÁY — nhập sau khi giao xong</div>
+          <div class="info-row">
+            <div class="field"><label>💰 Chi phí chuyến (đá, dầu, công...)</label><input type="number" value="${c.chiPhi||''}" placeholder="vd: 500000" onchange="updChuyen('${c.id}','chiPhi',this.value)"></div>
+            <div class="field"><label>🤝 Cò (hoa hồng đ/kg)</label><select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select></div>
+          </div>
+          ${c.coId?`<div style="display:flex;gap:6px;align-items:center;margin:2px 0 6px;"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"><label style="margin:0">✔ Đã trả hoa hồng cò</label></div>`:''}
+          <div class="info-row">
+            <div class="field"><label>⚖️ Kg NM cân nhận</label><input type="number" value="${c.nmKg||''}" placeholder="vd: 37.5" onchange="updChuyen('${c.id}','nmKg',this.value)"></div>
+            <div class="field"><label>🏷️ Giá NM mua (đ/kg)</label><input type="number" value="${c.giaNM||''}" placeholder="vd: 160000" onchange="updGiaNM('${c.id}',this.value)"></div>
+          </div>
           <label>💵 Tổng tiền NM trả (đ)</label>
           <input type="number" value="${c.nmTien||''}" placeholder="tự tính = giá × kg, sửa được" onchange="updChuyen('${c.id}','nmTien',this.value)">
-          ${c.nmKg?`<div class="hint">NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+' đ/kg':''} → ${fmt(c.nmTien)} đ</div>`:''}
-          ${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:4px"><span>💵 NM đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">NM nợ: ${fmt(nmNo)}đ</span></div><button class="btn small" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}
+          ${c.nmKg?`<div class="hint">= NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+' đ/kg':''} → ${fmt(c.nmTien)} đ</div>`:''}
+          ${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:6px;padding:0;"><span>💵 NM đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">NM còn nợ: ${fmt(nmNo)}đ</span></div><button class="btn small" style="margin-top:4px;" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}
         </div>
-        <div class="step"><b class="n">3</b>KẾT QUẢ: ${kqText(s)}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+
+        <div class="card banner" style="margin:0;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">📊 KẾT QUẢ CHUYẾN</div>
+          ${kqText(s)}
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
           ${c.tt<3?`<button class="btn small" onclick="nextTT('${c.id}')">▶ ${TT[c.tt+1]}</button>`:'<span class="tag ok">Đã tất toán ✅</span>'}
           <button class="btn small ghost" onclick="shareChuyen('${c.id}')">📤 Gửi Zalo</button>
-          <button class="btn small danger" onclick="delChuyen('${c.id}')">🗑 Xoá chuyến</button>
+        </div>
+        <div style="text-align:right;">
+          <span class="x" style="font-size:12px;color:var(--danger);cursor:pointer;" onclick="delChuyen('${c.id}')">🗑 Xoá chuyến này</span>
         </div>
       </div>`:''}
     </div>`;

@@ -246,7 +246,6 @@ let mauKgV='',mauConV='';
 let quotaWarned=false;
 // Khai báo sớm để tránh lỗi "dùng biến trước khi gán" — các hàm phía dưới cần đến các biến này
 const firebaseConfig={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
-const LAI_PIN='2468'; // ⚠️ Đổi mã này thành mã riêng của bạn trước khi phát cho nhân viên — chỉ Lái mới nên biết
 let myRole='lai',myEmployeeId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
 const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
 
@@ -1133,10 +1132,16 @@ function showRoleGate(msg){
   let g=document.getElementById('roleGate');
   if(!g){
     g=document.createElement('div');g.id='roleGate';
-    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;';
+    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;overflow:auto;';
     g.innerHTML=`<div style="font-size:44px">🦐</div><h2 style="color:var(--text)">Sổ Cân Tôm • Lái</h2>
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
-        <button class="btn" onclick="chooseRoleLai()">👑 Tôi là Lái (chủ)</button>
+        <div id="laiLoginBox" style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1.5px solid var(--accent);border-radius:10px;background:var(--accent-bg)">
+          <b style="color:var(--accent)">👑 Đăng nhập Lái (chủ)</b>
+          <input id="laiPhone" type="tel" placeholder="Số điện thoại của bạn" inputmode="numeric">
+          <input id="laiPass" type="password" placeholder="Mật khẩu">
+          <button class="btn" onclick="chooseRoleLai()">Đăng nhập / Tạo tài khoản</button>
+          <small style="color:var(--muted)">Lần đầu: gõ số điện thoại + đặt 1 mật khẩu bất kỳ (≥6 ký tự) để tạo tài khoản. Lần sau đăng nhập lại bằng đúng 2 thông tin này.</small>
+        </div>
         <div style="text-align:center;color:var(--muted);font-size:12px">— hoặc —</div>
         <input id="empCodeInput" placeholder="Nhập mã nhân viên" style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase">
         <button class="btn ghost" onclick="chooseRoleEmployee()">👤 Vào với mã nhân viên</button>
@@ -1147,13 +1152,38 @@ function showRoleGate(msg){
   const err=document.getElementById('roleErr');if(err)err.textContent=msg||'';
 }
 
+function phoneToFakeEmail(phone){
+  const digits=(phone||'').replace(/\D/g,'');
+  return digits+'@socantom-lai.local';
+}
+
 function chooseRoleLai(){
-  const pin=prompt('🔒 Nhập mã PIN của Lái:');
-  if(pin===null)return;
-  if(pin!==LAI_PIN){showRoleGate('❌ Sai mã PIN — không phải Lái thì chọn "Nhập mã nhân viên" bên dưới.');return;}
-  localStorage.setItem('lai_role','lai');myRole='lai';
-  const g=document.getElementById('roleGate');if(g)g.remove();
-  enterApp();
+  const phone=(document.getElementById('laiPhone').value||'').trim();
+  const pass=(document.getElementById('laiPass').value||'').trim();
+  if(!phone||phone.replace(/\D/g,'').length<9){showRoleGate('Nhập đúng số điện thoại (ít nhất 9 số).');return;}
+  if(!pass||pass.length<6){showRoleGate('Mật khẩu cần ít nhất 6 ký tự.');return;}
+  if(typeof firebase==='undefined'){showRoleGate('❌ Không tải được kết nối mạng. Kiểm tra internet rồi thử lại.');return;}
+  showRoleGate('Đang xử lý...');
+  const fakeEmail=phoneToFakeEmail(phone);
+  const auth=firebase.auth();
+  auth.signInWithEmailAndPassword(fakeEmail,pass).then(()=>{
+    localStorage.setItem('lai_role','lai');myRole='lai';
+    const g=document.getElementById('roleGate');if(g)g.remove();
+    enterApp();
+  }).catch(err=>{
+    if(err.code==='auth/user-not-found'){
+      // Lần đầu — tự tạo tài khoản với đúng số điện thoại + mật khẩu vừa nhập
+      auth.createUserWithEmailAndPassword(fakeEmail,pass).then(()=>{
+        localStorage.setItem('lai_role','lai');myRole='lai';
+        const g=document.getElementById('roleGate');if(g)g.remove();
+        enterApp();
+      }).catch(err2=>showRoleGate('❌ Lỗi tạo tài khoản: '+err2.message));
+    }else if(err.code==='auth/wrong-password'){
+      showRoleGate('❌ Sai mật khẩu cho số điện thoại này.');
+    }else{
+      showRoleGate('❌ Lỗi: '+err.message);
+    }
+  });
 }
 
 function chooseRoleEmployee(){
@@ -1179,14 +1209,28 @@ function enterApp(){
   render();applyRoleNav();checkReminders();updateNetBadge();
   try{
     if(typeof firebase==='undefined')throw new Error('Firebase SDK chưa tải được (mạng chậm hoặc bị chặn)');
-    firebase.auth().signInAnonymously().then(()=>{
+    const afterAuth=()=>{
       cloudReady=true;cloudListen();updateNetBadge();
       if(myRole==='lai'){
         firebase.firestore().collection('shared').doc('tin').get().then(snap=>{
           if(!snap.exists)cloudPush(); // lần đầu bật đồng bộ: đẩy dữ liệu sẵn có trên máy lái lên làm gốc
         });
       }
-    }).catch(err=>{console.warn(err);cloudSyncState='error';updateNetBadge();});
+    };
+    if(myRole==='lai'){
+      // Lái đã đăng nhập thật (SĐT+mật khẩu) — TUYỆT ĐỐI không gọi signIn nào khác ở đây kẻo mất phiên đăng nhập thật.
+      // Chỉ chờ Firebase xác nhận lại trạng thái đăng nhập (tự khôi phục từ phiên trước nếu có).
+      const unsub=firebase.auth().onAuthStateChanged(user=>{
+        unsub();
+        if(user)afterAuth();
+        else{ // phiên cũ hết hạn hoặc chưa từng đăng nhập ở máy này — quay lại màn hình đăng nhập
+          localStorage.removeItem('lai_role');
+          showRoleGate('Phiên đăng nhập đã hết — vui lòng đăng nhập lại.');
+        }
+      });
+    }else{
+      firebase.auth().signInAnonymously().then(afterAuth).catch(err=>{console.warn(err);cloudSyncState='error';updateNetBadge();});
+    }
   }catch(err){
     // Firebase không tải được (mạng chặn/CDN lỗi) — app vẫn dùng bình thường ở chế độ offline, không đồng bộ
     console.warn('Không kết nối được máy chủ đồng bộ:',err);

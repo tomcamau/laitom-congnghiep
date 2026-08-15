@@ -221,6 +221,7 @@ body.dark .money-display .label,body.dark .money-display .value{color:#6ee7b7}
 
 <script>
 const KEY='soCanTom_lai_v4';
+const RESET_KEY=KEY+'_reset_pending';
 let db=JSON.parse(localStorage.getItem(KEY)||'null')||{tin:[],phieu:[],chuyen:[],khach:[],co:[],gia:[],tra:[],von:[],sheets:[],employees:[],activeSheet:null,active:null,payments:[],settings:{autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false}};
 db.employees=db.employees||[];
 if(!db.payments)db.payments=[];if(!db.von)db.von=[];
@@ -242,18 +243,24 @@ let infoOpen=localStorage.getItem('lai_ui_info')==='1';
 let numpadOpen=localStorage.getItem('lai_ui_numpad')!=='0';
 let lastTableScroll=0;
 let phieuQ='',phieuPeriod='all',khachQ='',khachFilter='all';
+let banFilter='all',banQ='',banDetailId=null,banSort='new';
 let mauKgV='',mauConV='';
 let quotaWarned=false;
-// Khai báo sớm để tránh lỗi "dùng biến trước khi gán" — các hàm phía dưới cần đến các biến này
-const firebaseConfig={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
-let myRole='lai',myEmployeeId=null,myTenantId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null;
-const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
 
 function save(skipCloud){try{localStorage.setItem(KEY,JSON.stringify(db));}catch(e){if(!quotaWarned){quotaWarned=true;alert('⚠️ Bộ nhớ đầy! Xóa bớt ảnh hoặc sao lưu rồi dọn dữ liệu cũ.');}}if(!skipCloud)cloudPush();}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
-const fmt=n=>(Math.round(n||0)).toLocaleString('vi-VN');
-const fkg=n=>(n||0).toLocaleString('vi-VN',{maximumFractionDigits:1});
-const esc=s=>(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+const fmt=n=>(Math.round(Number(n)||0)).toLocaleString('vi-VN');
+const fkg=n=>(Number(n)||0).toLocaleString('vi-VN',{maximumFractionDigits:1});
+const parseNum=v=>{if(typeof v==='number')return Number.isFinite(v)?v:0;const s=String(v??'').trim().replace(/\s/g,'').replace(/,/g,'.');const n=Number(s);return Number.isFinite(n)?n:0;};
+const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+function rowNetWeights(cells,bi,tap,tapType){
+  const afterBi=(cells||[]).map(v=>Math.max(0,parseNum(v)-parseNum(bi)));
+  const afterTotal=afterBi.reduce((a,b)=>a+b,0);
+  const tapKg=tapType==='pct'?afterTotal*Math.max(0,parseNum(tap))/100:Math.min(afterTotal,Math.max(0,parseNum(tap)));
+  return afterBi.map(v=>afterTotal?Math.max(0,v-tapKg*(v/afterTotal)):0);
+}
+function rowPrice(p,i){return p.giaRieng?(parseNum(p.giaRieng[i])||parseNum(p.gia)):parseNum(p.gia);}
+function rowNetMoney(p,i){const nets=rowNetWeights((p.ro||[]).map(r=>r.g),p.bi,p.tap,p.tapType);return Math.round((nets[i]||0)*rowPrice(p,i));}
 const today=()=>new Date().toISOString().slice(0,10);
 const fmtTime=ts=>new Date(ts).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
 function vib(ms){if(db.settings.vibrate&&navigator.vibrate)navigator.vibrate(ms||20);}
@@ -273,12 +280,16 @@ function applyStatsBar(){
   document.getElementById('statsBtn').classList.toggle('hide',!!db.settings.statsHidden);
 }
 
-document.addEventListener('DOMContentLoaded',function(){
+window.__APP_FIREBASE_CONFIG={apiKey:"AIzaSyDWeaORkCqViXkeeCv0fUhesA6i5M0pGnI",authDomain:"so-can-tom-lai.firebaseapp.com",projectId:"so-can-tom-lai",storageBucket:"so-can-tom-lai.firebasestorage.app",messagingSenderId:"1072434855399",appId:"1:1072434855399:web:f3757c554ac8d555b29142"};
+function bootApp(){
   isAutoDecimal=db.settings.autoDec||false;decimalPlaces=db.settings.decimalPlaces||1;colsPerTab=db.settings.colsPerTab||5;
   applyTheme();applyStatsBar();ensureActive();ensureSheet();
-  initCloudAndRole();
+  initLicenseAndRole();
+  updateNetBadge();
   setInterval(autoSaveSession,30000);
-});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(bootApp,0),{once:true});
+else setTimeout(bootApp,0);
 function autoSaveSession(){if(mainTab==='bang'&&curSheet()){const s=curSheet();s.cells=gridData;s.cols=cols;s.rows=rows;save();}}
 
 function applyRoleNav(){
@@ -320,17 +331,13 @@ function netInfo(cells,bi,tap,tapType){
   const gross=cells.reduce((a,b)=>a+b,0);
   const biT=(bi||0)*cells.length;
   const after=Math.max(0,gross-biT);
-  const tapKg=tapType==='pct'?after*((tap||0)/100):(tap||0);
+  const tapKg=tapType==='pct'?after*(Math.max(0,parseNum(tap))/100):Math.min(after,Math.max(0,parseNum(tap)));
   return{gross,biT,tapKg,net:Math.max(0,after-tapKg)};
 }
 function moneyFrom(cells,bi,tap,tapType,gia,giaRieng){
-  const{gross,biT,tapKg,net}=netInfo(cells,bi,tap,tapType);
-  if(giaRieng&&giaRieng.length===cells.length){
-    let tong=cells.reduce((s,v,i)=>s+Math.max(0,v-(bi||0))*(giaRieng[i]||gia),0);
-    if(tapType==='pct')tong-=tong*((tap||0)/100);else tong-=tapKg*gia;
-    return Math.max(0,Math.round(tong));
-  }
-  return Math.round(net*gia);
+  const nets=rowNetWeights(cells,bi,tap,tapType);
+  if(giaRieng&&giaRieng.length===cells.length)return Math.max(0,Math.round(nets.reduce((s,v,i)=>s+v*(parseNum(giaRieng[i])||parseNum(gia)),0)));
+  return Math.max(0,Math.round(nets.reduce((s,v)=>s+v,0)*parseNum(gia)));
 }
 function calcPhieuTotal(p){
   const cells=(p.ro||[]).map(r=>r.g);
@@ -598,7 +605,7 @@ function exportSheetFile(){
   }
   downloadBlob(blob,fname);
 }
-function downloadBlob(blob,fname){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;a.click();}
+function downloadBlob(blob,fname){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fname;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
 function importSheetFile(e){
   const file=e.target.files[0];if(!file)return;
@@ -643,7 +650,7 @@ function formatAutoDigits(d){if(!d.length)return'';if(d.length<=decimalPlaces)re
 function appendNumber(val){const inp=document.querySelector(`.cell-input[data-index="${selectedIndex}"]`);if(!inp)return;let cur=inp.value||'';if(isAutoDecimal){if(val==='.'||val===',')return;inp.value=formatAutoDigits(cur.replace(/\./g,'').replace(/^0+/,'')+val);}else{if((val==='.'||val===',')&&(cur.includes('.')||cur.includes(',')))return;inp.value=(cur==='0'&&val!=='.'&&val!==',')?val:cur+val;}updateDataFromInput(inp);vib(10);}
 function deleteLast(){const inp=document.querySelector(`.cell-input[data-index="${selectedIndex}"]`);if(!inp)return;let cur=inp.value||'';if(isAutoDecimal){const d=cur.replace(/\./g,'').replace(/^0+/,'').slice(0,-1);inp.value=d.length?'':formatAutoDigits(d);}else inp.value=cur.slice(0,-1);updateDataFromInput(inp);vib(10);}
 function clearCell(){const inp=document.querySelector(`.cell-input[data-index="${selectedIndex}"]`);if(!inp)return;inp.value='';updateDataFromInput(inp);}
-function updateDataFromInput(inp){const i=parseInt(inp.dataset.index);const v=parseFloat(inp.value.replace(/,/g,'.'));gridData[i]=isNaN(v)?null:v;const cell=inp.closest('td');if(cell)cell.classList.toggle('done-cell',gridData[i]!==null&&gridData[i]!=='');const s=curSheet();s.cells=gridData;s.cols=cols;s.rows=rows;save();updateColumnFooters();}
+function updateDataFromInput(inp){const i=parseInt(inp.dataset.index);const v=parseNum(inp.value);gridData[i]=inp.value.trim()===''?null:v;const cell=inp.closest('td');if(cell)cell.classList.toggle('done-cell',gridData[i]!==null&&gridData[i]!=='');const s=curSheet();s.cells=gridData;s.cols=cols;s.rows=rows;save();updateColumnFooters();}
 function updateColumnFooters(){const startCol=currentTab*colsPerTab,endCol=Math.min(startCol+colsPerTab,cols);const fi=document.querySelectorAll('.total-row input');let i=0;for(let c=startCol;c<endCol;c++){let sum=0;for(let r=0;r<rows;r++){const v=gridData[r*cols+c];if(v&&!isNaN(v))sum+=v;}if(fi[i])fi[i].value=sum.toFixed(1);i++;}}
 function enterValue(){const c=getCol(selectedIndex),r=getRow(selectedIndex);if(r===rows-1){if(c+1<cols)selectedIndex=getIndex(c+1,0);else{addColumn();selectedIndex=getIndex(cols-1,0);}}else selectedIndex=getIndex(c,r+1);vib();render();}
 const getIndex=(col,row)=>row*cols+col;
@@ -704,13 +711,13 @@ function renderCan(){
       <details><summary>Xem ${pendingWeigh.cells.length} rổ</summary><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:3px;margin-top:6px">${pendingWeigh.cells.map((v,i)=>`<div style="background:var(--panel);border:1px solid var(--border);padding:4px;border-radius:6px;text-align:center;font-size:11px"><b>r${i+1}</b><br>${fkg(v)}</div>`).join('')}</div></details>
       ${pendingWeigh.photos.length?`<label>📸 Ảnh (${pendingWeigh.photos.length})</label><div class="photo-grid">${pendingWeigh.photos.map(p=>`<div class="photo-thumb"><img src="${p}"></div>`).join('')}</div>`:''}
       <label>💵 Giá mua (đ/kg)</label>
-      <input type="number" id="pwGia" value="${pendingWeigh.gia||''}" placeholder="VD: 150000" oninput="pendingWeigh.gia=+this.value||0;lastGia=this.value;updatePendingMoney()">
+      <input type="number" id="pwGia" value="${pendingWeigh.gia||''}" placeholder="VD: 150000" oninput="pendingWeigh.gia=parseNum(this.value);lastGia=this.value;updatePendingMoney()">
       ${pendingWeigh.giaDeXuat?`<div class="hint">💡 Bảng giá ngày size ${pendingWeigh.size}: ${fmt(pendingWeigh.giaDeXuat)} đ/kg</div>`:''}
       <div style="display:flex;gap:6px;align-items:center;margin-top:6px;padding:6px 8px;background:var(--panel);border-radius:6px"><input type="checkbox" id="pwMultiPrice" ${pendingWeigh.giaRieng?'checked':''} style="width:auto" onchange="toggleMultiPrice()"><label for="pwMultiPrice" style="margin:0;flex:1;font-size:12px">🏷️ Giá riêng từng rổ</label></div>
       <div id="multiPriceArea"></div>
       <div style="display:flex;gap:6px;margin-top:6px">
-        <div style="flex:1"><label>🧺 Trừ bì (kg/rổ)</label><input type="number" value="${pendingWeigh.bi||''}" placeholder="0" oninput="pendingWeigh.bi=+this.value||0;updatePendingMoney()"></div>
-        <div style="flex:1"><label>🐚 Trừ tạp</label><input type="number" value="${pendingWeigh.tap||''}" placeholder="0" oninput="pendingWeigh.tap=+this.value||0;updatePendingMoney()"></div>
+        <div style="flex:1"><label>🧺 Trừ bì (kg/rổ)</label><input type="number" value="${pendingWeigh.bi||''}" placeholder="0" oninput="pendingWeigh.bi=Math.max(0,parseNum(this.value));updatePendingMoney()"></div>
+        <div style="flex:1"><label>🐚 Trừ tạp</label><input type="number" value="${pendingWeigh.tap||''}" placeholder="0" oninput="pendingWeigh.tap=Math.max(0,parseNum(this.value));updatePendingMoney()"></div>
         <div style="flex:1"><label>&nbsp;</label><div class="chip-group"><span class="chip ${pendingWeigh.tapType!=='pct'?'on':''}" onclick="pendingWeigh.tapType='kg';render()">kg</span><span class="chip ${pendingWeigh.tapType==='pct'?'on':''}" onclick="pendingWeigh.tapType='pct';render()">%</span></div></div>
       </div>
       <div class="hint" id="pwNetInfo"></div>
@@ -739,11 +746,20 @@ function renderPhieuHistory(){
   const chips=[['all','Tất cả'],['homnay','Hôm nay'],['7n','7 ngày'],['thang','Tháng']].map(([v,l])=>`<span class="chip ${phieuPeriod===v?'on':''}" onclick="phieuPeriod='${v}';renderPhieuHistory()">${l}</span>`).join('');
   area.innerHTML=`<div class="filter-chips">${chips}</div>`+(list.slice(0,50).map(p=>phieuRow(p,true)).join('')||'<i>Không có phiếu phù hợp.</i>')+(list.length>50?`<div class="hint">Hiện 50/${list.length} — gõ tìm để lọc.</div>`:'');
 }
-function renderCostArea(){const a=document.getElementById('costArea');if(!a)return;a.innerHTML=pendingCosts.map((c,i)=>`<div class="cost-row"><input value="${esc(c.name)}" placeholder="Mục chi (đá, oxy...)" onchange="pendingCosts[${i}].name=this.value"><input type="number" value="${c.amount||''}" placeholder="0" onchange="pendingCosts[${i}].amount=+this.value||0;updatePendingMoney()"><button class="del" onclick="pendingCosts.splice(${i},1);renderCostArea();updatePendingMoney()">✕</button></div>`).join('')||'<div style="font-size:12px;color:var(--muted);padding:4px 0">Chưa có chi phí tại ao.</div>';}
+function renderCostArea(){const a=document.getElementById('costArea');if(!a)return;a.innerHTML=pendingCosts.map((c,i)=>`<div class="cost-row"><input value="${esc(c.name)}" placeholder="Mục chi (đá, oxy...)" onchange="pendingCosts[${i}].name=this.value"><input type="number" value="${c.amount||''}" placeholder="0" onchange="pendingCosts[${i}].amount=Math.max(0,parseNum(this.value));updatePendingMoney()"><button class="del" onclick="pendingCosts.splice(${i},1);renderCostArea();updatePendingMoney()">✕</button></div>`).join('')||'<div style="font-size:12px;color:var(--muted);padding:4px 0">Chưa có chi phí tại ao.</div>';}
 function addCost(){pendingCosts.push({name:'',amount:0});renderCostArea();}
-function toggleMultiPrice(){const chk=document.getElementById('pwMultiPrice').checked;if(chk&&!pendingWeigh.giaRieng)pendingWeigh.giaRieng=pendingWeigh.cells.map(()=>+lastGia||pendingWeigh.gia||0);else if(!chk)pendingWeigh.giaRieng=null;renderMultiPriceArea();updatePendingMoney();}
-function renderMultiPriceArea(){const a=document.getElementById('multiPriceArea');if(!a||!pendingWeigh)return;if(!pendingWeigh.giaRieng){a.innerHTML='';return;}a.innerHTML='<label style="font-size:11px">Giá từng rổ (đ/kg):</label>'+pendingWeigh.cells.map((v,i)=>`<div style="display:flex;gap:4px;align-items:center;margin-bottom:3px"><span style="font-size:11px;width:30px">r${i+1}</span><span style="font-size:11px;width:44px;color:var(--muted)">${fkg(v)}kg</span><input type="number" value="${pendingWeigh.giaRieng[i]||''}" style="flex:1;padding:6px" oninput="pendingWeigh.giaRieng[${i}]=+this.value||0;updatePendingMoney()"></div>`).join('');}
+function toggleMultiPrice(){const chk=document.getElementById('pwMultiPrice').checked;if(chk&&!pendingWeigh.giaRieng)pendingWeigh.giaRieng=pendingWeigh.cells.map(()=>parseNum(lastGia)||parseNum(pendingWeigh.gia)||0);else if(!chk)pendingWeigh.giaRieng=null;renderMultiPriceArea();updatePendingMoney();}
+function renderMultiPriceArea(){const a=document.getElementById('multiPriceArea');if(!a||!pendingWeigh)return;if(!pendingWeigh.giaRieng){a.innerHTML='';return;}a.innerHTML='<label style="font-size:11px">Giá từng rổ (đ/kg):</label>'+pendingWeigh.cells.map((v,i)=>`<div style="display:flex;gap:4px;align-items:center;margin-bottom:3px"><span style="font-size:11px;width:30px">r${i+1}</span><span style="font-size:11px;width:44px;color:var(--muted)">${fkg(v)}kg</span><input type="number" value="${pendingWeigh.giaRieng[i]||''}" style="flex:1;padding:6px" oninput="pendingWeigh.giaRieng[${i}]=Math.max(0,parseNum(this.value));updatePendingMoney()"></div>`).join('');}
 function calcPendingTotal(){if(!pendingWeigh)return 0;return moneyFrom(pendingWeigh.cells,pendingWeigh.bi,pendingWeigh.tap,pendingWeigh.tapType,pendingWeigh.gia,pendingWeigh.giaRieng);}
+function validatePendingWeigh(){
+  if(!pendingWeigh||!pendingWeigh.cells?.length)return 'Chưa có số cân.';
+  if(pendingWeigh.cells.some(v=>parseNum(v)<=0))return 'Có rổ chưa có số kg hợp lệ.';
+  if(pendingWeigh.bi<0||pendingWeigh.tap<0)return 'Bì và tạp không được âm.';
+  if(pendingWeigh.tapType==='pct'&&pendingWeigh.tap>100)return 'Tạp theo % không được vượt quá 100%.';
+  if(pendingWeigh.giaRieng&&pendingWeigh.giaRieng.some((g,i)=>parseNum(g)<=0&&parseNum(pendingWeigh.gia)<=0))return 'Cần nhập giá cho tất cả rổ.';
+  if(!pendingWeigh.giaRieng&&parseNum(pendingWeigh.gia)<=0)return 'Nhập giá mua trước.';
+  return '';
+}
 function updatePendingMoney(){
   if(!pendingWeigh)return;
   const t=document.getElementById('pwTien');if(t)t.textContent=fmt(calcPendingTotal())+' đ';
@@ -753,7 +769,8 @@ function updatePendingMoney(){
 }
 function confirmPending(){
   if(!pendingWeigh)return;
-  if(!pendingWeigh.gia&&!pendingWeigh.giaRieng){alert('⚠️ Nhập giá mua trước.');return;}
+  const validationError=validatePendingWeigh();
+  if(validationError){alert('⚠️ '+validationError);return;}
   if(pendingWeigh.gia)lastGia=String(pendingWeigh.gia);
   const ni=netInfo(pendingWeigh.cells,pendingWeigh.bi,pendingWeigh.tap,pendingWeigh.tapType);
   const chiPhiAo=pendingCosts.reduce((s,c)=>s+(+c.amount||0),0);
@@ -803,10 +820,19 @@ function openPayment(id){
     <div class="money-display"><div class="label">CÒN NỢ</div><div class="value" id="pConNo">${fmt(tong-phieuDaTra(p))} đ</div></div>
     <button class="btn" onclick="savePayment('${id}')">💾 Lưu thanh toán</button>
     <button class="btn ghost" onclick="closeOv('ovPayment')">✕ Đóng</button>`;
-  ['pCoc','pTienMat','pCK'].forEach(i=>{document.getElementById(i).addEventListener('input',()=>{const no=tong-((+document.getElementById('pCoc').value||0)+(+document.getElementById('pTienMat').value||0)+(+document.getElementById('pCK').value||0));const el=document.getElementById('pConNo');el.textContent=fmt(no)+' đ';el.style.color=no>0?'#dc2626':'#15803d';});});
+  ['pCoc','pTienMat','pCK'].forEach(i=>{document.getElementById(i).addEventListener('input',()=>{const daTra=['pCoc','pTienMat','pCK'].reduce((s,k)=>s+Math.max(0,parseNum(document.getElementById(k).value)),0);const no=tong-daTra;const el=document.getElementById('pConNo');el.textContent=(no<0?'Dư ':'')+fmt(Math.abs(no))+' đ';el.style.color=no>0?'#dc2626':'#15803d';});});
   openOv('ovPayment');
 }
-function savePayment(id){const p=db.phieu.find(x=>x.id===id);if(!p)return;p.coc=+document.getElementById('pCoc').value||0;p.tienMat=+document.getElementById('pTienMat').value||0;p.chuyenKhoan=+document.getElementById('pCK').value||0;db.payments.push({id:uid(),phieuId:id,khachId:p.khachId,coc:p.coc,tienMat:p.tienMat,chuyenKhoan:p.chuyenKhoan,ts:Date.now()});save();vib();closeOv('ovPayment');render();}
+function savePayment(id){
+  const p=db.phieu.find(x=>x.id===id);if(!p)return;
+  const values=['pCoc','pTienMat','pCK'].map(k=>Math.max(0,parseNum(document.getElementById(k).value)));
+  const [coc,tienMat,chuyenKhoan]=values;
+  const tong=calcPhieuTotal(p),daTra=coc+tienMat+chuyenKhoan;
+  if(daTra>tong){alert('⚠️ Tổng thanh toán không được vượt quá thành tiền phiếu.');return;}
+  p.coc=coc;p.tienMat=tienMat;p.chuyenKhoan=chuyenKhoan;
+  db.payments.push({id:uid(),phieuId:id,khachId:p.khachId,coc,tienMat,chuyenKhoan,ts:Date.now()});
+  save();vib();closeOv('ovPayment');render();
+}
 
 // ===== ZALO / IN =====
 function shareZalo(id){
@@ -816,7 +842,8 @@ function shareZalo(id){
   if(p.gps)txt+=`📍 ${p.gps.lat}, ${p.gps.lng}\n`;
   if(p.thoiGian)txt+=`🕐 ${fmtTime(p.thoiGian.start)} → ${fmtTime(p.thoiGian.end)}\n`;
   txt+=`\n📊 ${p.ro.length} RỔ (gộp ${fkg(p.kgGross||p.kg)}kg${(p.bi||p.tap)?`, bì ${p.bi||0}kg/rổ, tạp ${p.tap||0}${p.tapType==='pct'?'%':'kg'}`:''}):\n`;
-  p.ro.forEach((r,i)=>{const gia=p.giaRieng?(p.giaRieng[i]||p.gia):p.gia;txt+=`r${i+1}: ${fkg(r.g)}kg × ${fmt(gia)} = ${fmt(r.g*gia)}đ\n`;});
+  const nets=rowNetWeights(p.ro.map(r=>r.g),p.bi,p.tap,p.tapType);
+  p.ro.forEach((r,i)=>{const gia=rowPrice(p,i);txt+=`r${i+1}: ${fkg(nets[i])}kg NET × ${fmt(gia)} = ${fmt(nets[i]*gia)}đ\n`;});
   txt+=`\n💰 NET ${fkg(p.kg)}kg = *${fmt(tong)}đ*\n`;
   if(p.coc)txt+=`💰 Cọc: ${fmt(p.coc)}đ\n`;
   if(daTra>0)txt+=`✔ Đã trả: ${fmt(daTra)}đ\n`;
@@ -853,7 +880,7 @@ function printPhieu(id){
   ${p.gps?`<p><b>GPS:</b> ${p.gps.lat}, ${p.gps.lng}</p>`:''}
   ${p.bi||p.tap?`<p><b>Trừ bì:</b> ${p.bi||0} kg/rổ • <b>Trừ tạp:</b> ${p.tap||0}${p.tapType==='pct'?'%':' kg'} (gộp ${fkg(p.kgGross||p.kg)}kg → net ${fkg(p.kg)}kg)</p>`:''}
   <table style="width:100%;border-collapse:collapse;margin:15px 0"><tr style="background:#eee"><th style="border:1px solid #000;padding:6px">Rổ</th><th style="border:1px solid #000;padding:6px">Kg</th><th style="border:1px solid #000;padding:6px">Giá</th><th style="border:1px solid #000;padding:6px">Thành tiền</th></tr>
-  ${p.ro.map((r,i)=>{const gia=p.giaRieng?(p.giaRieng[i]||p.gia):p.gia;return`<tr><td style="border:1px solid #000;padding:4px;text-align:center">${i+1}</td><td style="border:1px solid #000;padding:4px;text-align:center">${fkg(r.g)}</td><td style="border:1px solid #000;padding:4px;text-align:right">${fmt(gia)}</td><td style="border:1px solid #000;padding:4px;text-align:right">${fmt(r.g*gia)}</td></tr>`;}).join('')}
+  ${(()=>{const nets=rowNetWeights(p.ro.map(r=>r.g),p.bi,p.tap,p.tapType);return p.ro.map((r,i)=>{const gia=rowPrice(p,i);return`<tr><td style="border:1px solid #000;padding:4px;text-align:center">${i+1}</td><td style="border:1px solid #000;padding:4px;text-align:center">${fkg(nets[i])}</td><td style="border:1px solid #000;padding:4px;text-align:right">${fmt(gia)}</td><td style="border:1px solid #000;padding:4px;text-align:right">${fmt(nets[i]*gia)}</td></tr>`;}).join('')})()}
   <tr style="background:#fffacd;font-weight:bold"><td colspan="2" style="border:1px solid #000;padding:6px">TỔNG (NET)</td><td style="border:1px solid #000;padding:6px;text-align:right">${fkg(p.kg)}kg</td><td style="border:1px solid #000;padding:6px;text-align:right">${fmt(tong)} đ</td></tr></table>
   ${daTra>0?`<p><b>Đã trả:</b> ${fmt(daTra)} đ (cọc ${fmt(p.coc||0)} + TM ${fmt(p.tienMat||0)} + CK ${fmt(p.chuyenKhoan||0)})</p>`:''}
   ${conNo>0?`<p style="font-size:18px;color:red"><b>CÒN NỢ: ${fmt(conNo)} đ</b></p>`:'<p style="color:green"><b>ĐÃ THANH TOÁN ĐỦ</b></p>'}
@@ -887,76 +914,55 @@ function printDoiChieu(id){
 
 // ===== 🏭 BÁN =====
 const TT=['Đặt ao','Đang cân','Giao NM','Tất toán'];
-let expandedChuyenId=null;
-function toggleChuyenCard(id){expandedChuyenId=(expandedChuyenId===id)?null:id;vib();render();}
-
-function renderBan(){
-  if(expandedChuyenId===null&&db.active)expandedChuyenId=db.active; // mặc định mở sẵn chuyến đang hoạt động
-  return`<button class="btn ghost" onclick="newChuyen()">＋ Chuyến mới</button><p class="hint" style="margin-top:6px">Mỗi chuyến = 1 xe tôm: mua ao → giao NM → lãi/lỗ. Bấm vào từng chuyến để xổ ra xem/nhập, bấm lần nữa để thu gọn.</p>`+
-  db.chuyen.map(c=>{
-    const s=cStats(c);
-    const nmNo=(c.nmTien||0)-(c.nmDaTra||0);
-    const isOpen=expandedChuyenId===c.id;
-    const stageTag=TT[c.tt]||'';
-    return`<div class="card" style="margin-top:8px;padding:0;overflow:hidden;">
-      <div class="toggle-header" onclick="toggleChuyenCard('${c.id}')" style="border-radius:${isOpen?'10px 10px 0 0':'10px'};">
-        <span class="label">🚚 ${esc(c.ten)} ${c.id===db.active?'🟢':''}</span>
-        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <span class="tag ${c.tt===3?'ok':'new'}" style="white-space:nowrap;">${stageTag}</span>
-          <b style="font-size:13px;color:var(--accent);white-space:nowrap;">${fkg(s.kg)}kg</b>
-          ${s.loi!=null?`<b style="font-size:13px;white-space:nowrap;color:${s.loi<0?'var(--danger)':'var(--ok)'}">${s.loi>=0?'+':''}${fmt(s.loi)}đ</b>`:''}
-          <span class="arrow" style="display:inline-block;transition:transform .2s;transform:rotate(${isOpen?'180':'0'}deg);">▼</span>
-        </span>
-      </div>
-      ${isOpen?`<div style="padding:10px 12px;display:flex;flex-direction:column;gap:8px;">
-        <div style="background:var(--panel);border-radius:8px;padding:8px 10px;">
-          <div class="row-flex" style="border:0;padding:0;">
-            <span style="font-weight:700;font-size:13px;color:var(--muted);">🛒 ĐÃ MUA TẠI AO</span>
-            <span style="font-size:13px;"><b>${fkg(s.kg)}kg</b> • ${fmt(s.tien)}đ</span>
-          </div>
-          ${s.chiPhiAo>0?`<div class="hint" style="margin:2px 0 0;">💰 Chi phí tại ao: ${fmt(s.chiPhiAo)} đ</div>`:''}
-          <details><summary style="font-size:12px;color:var(--accent);cursor:pointer;margin-top:2px;">${s.ps.length} phiếu — xem chi tiết</summary>${s.ps.map(p=>`<div style="padding:3px 0;font-size:12px">• ${esc(kTen(p.khachId))} ${p.loai==='su'?'sú':'thẻ'} sz${p.size} ${fkg(p.kg)}kg ${p.giaRieng?'(giá riêng)':'@'+fmt(p.gia)}</div>`).join('')||'<i>trống</i>'}</details>
-        </div>
-
-        <div style="background:var(--accent-bg);border:1px solid var(--accent);border-radius:8px;padding:8px 10px;">
-          <div style="font-weight:700;font-size:13px;color:var(--accent);margin-bottom:4px;">🏭 GIAO NHÀ MÁY — nhập sau khi giao xong</div>
-          <div class="info-row">
-            <div class="field"><label>💰 Chi phí chuyến (đá, dầu, công...)</label><input type="number" value="${c.chiPhi||''}" placeholder="vd: 500000" onchange="updChuyen('${c.id}','chiPhi',this.value)"></div>
-            <div class="field"><label>🤝 Cò (hoa hồng đ/kg)</label><select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select></div>
-          </div>
-          ${c.coId?`<div style="display:flex;gap:6px;align-items:center;margin:2px 0 6px;"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"><label style="margin:0">✔ Đã trả hoa hồng cò</label></div>`:''}
-          <div class="info-row">
-            <div class="field"><label>⚖️ Kg NM cân nhận</label><input type="number" value="${c.nmKg||''}" placeholder="vd: 37.5" onchange="updChuyen('${c.id}','nmKg',this.value)"></div>
-            <div class="field"><label>🏷️ Giá NM mua (đ/kg)</label><input type="number" value="${c.giaNM||''}" placeholder="vd: 160000" onchange="updGiaNM('${c.id}',this.value)"></div>
-          </div>
-          <label>💵 Tổng tiền NM trả (đ)</label>
-          <input type="number" value="${c.nmTien||''}" placeholder="tự tính = giá × kg, sửa được" onchange="updChuyen('${c.id}','nmTien',this.value)">
-          ${c.nmKg?`<div class="hint">= NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+' đ/kg':''} → ${fmt(c.nmTien)} đ</div>`:''}
-          ${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:6px;padding:0;"><span>💵 NM đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">NM còn nợ: ${fmt(nmNo)}đ</span></div><button class="btn small" style="margin-top:4px;" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}
-        </div>
-
-        <div class="card banner" style="margin:0;">
-          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">📊 KẾT QUẢ CHUYẾN</div>
-          ${kqText(s)}
-        </div>
-
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          ${c.tt<3?`<button class="btn small" onclick="nextTT('${c.id}')">▶ ${TT[c.tt+1]}</button>`:'<span class="tag ok">Đã tất toán ✅</span>'}
-          <button class="btn small ghost" onclick="shareChuyen('${c.id}')">📤 Gửi Zalo</button>
-        </div>
-        <div style="text-align:right;">
-          <span class="x" style="font-size:12px;color:var(--danger);cursor:pointer;" onclick="delChuyen('${c.id}')">🗑 Xoá chuyến này</span>
-        </div>
-      </div>`:''}
-    </div>`;
-  }).join('');
+function banStatus(c){
+  if(c.tt>=3)return{key:'done',label:'Đã tất toán',cls:'ok'};
+  if((c.nmTien||0)-(c.nmDaTra||0)>0)return{key:'debt',label:'Còn nợ NM',cls:'warn'};
+  if(c.nmKg>0)return{key:'received',label:'Đã giao',cls:'info'};
+  if(c.tt>=2)return{key:'delivery',label:'Chờ giao NM',cls:'warn'};
+  return{key:'active',label:TT[c.tt]||'Đang xử lý',cls:'info'};
 }
-function newChuyen(){const ten=prompt('Tên chuyến','Chuyến '+new Date().toLocaleDateString('vi-VN'));if(ten){db.chuyen.unshift({id:uid(),ten,ngay:today(),tt:0,chiPhi:0,nmKg:0,nmTien:0,nmDaTra:0,giaNM:0,coId:null,coDaTra:false,logs:[{ts:Date.now(),msg:'Tạo chuyến'}]});db.active=db.chuyen[0].id;expandedChuyenId=db.active;save();render();}}
-function updChuyen(id,f,v){const c=db.chuyen.find(x=>x.id===id);if(f==='coId')c[f]=v;else if(f==='coDaTra')c[f]=!!v;else c[f]=+v||0;if(f==='nmKg'&&c.giaNM)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
-function updGiaNM(id,v){const c=db.chuyen.find(x=>x.id===id);c.giaNM=+v||0;if(c.giaNM&&c.nmKg)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
-function thuTienNM(id){const c=db.chuyen.find(x=>x.id===id);const no=(c.nmTien||0)-(c.nmDaTra||0);const t=+prompt(`Số tiền NM trả đợt này (còn nợ ${fmt(no)}đ):`);if(t>0){c.nmDaTra=(c.nmDaTra||0)+t;c.logs.push({ts:Date.now(),msg:'NM trả '+fmt(t)+'đ'});save();vib();render();}}
+function banMatches(c){
+  const s=banStatus(c),q=banQ.trim().toLowerCase();
+  const hit=!q||[c.ten,c.ngay,TT[c.tt],s.label].join(' ').toLowerCase().includes(q);
+  const ok=banFilter==='all'||(banFilter==='active'&&c.tt<3)||(banFilter==='delivery'&&s.key==='delivery')||(banFilter==='debt'&&s.key==='debt')||(banFilter==='done'&&s.key==='done');
+  return hit&&ok;
+}
+function renderBan(){
+  const all=db.chuyen.slice();
+  const filtered=all.filter(banMatches).sort((a,b)=>{
+    if(banSort==='old')return String(a.ngay).localeCompare(String(b.ngay));
+    if(banSort==='debt')return ((b.nmTien||0)-(b.nmDaTra||0))-((a.nmTien||0)-(a.nmDaTra||0));
+    return String(b.ngay).localeCompare(String(a.ngay));
+  });
+  const active=all.filter(c=>c.tt<3).length,debt=all.reduce((n,c)=>n+Math.max(0,(c.nmTien||0)-(c.nmDaTra||0)),0),received=all.reduce((n,c)=>n+(c.nmKg||0),0);
+  const chips=[['all','Tất cả',all.length],['active','Đang xử lý',all.filter(c=>c.tt<3).length],['delivery','Chờ giao',all.filter(c=>banStatus(c).key==='delivery').length],['debt','Nợ NM',all.filter(c=>banStatus(c).key==='debt').length],['done','Đã xong',all.filter(c=>c.tt>=3).length]].map(([k,l,n])=>`<span class="chip ${banFilter===k?'on':''}" onclick="banFilter='${k}';banDetailId=null;render()">${l} <b>${n}</b></span>`).join('');
+  return`<div class="card" style="padding:8px;margin-bottom:8px">
+    <div class="row-flex" style="border:0;gap:6px;align-items:center"><div><b>🏭 Giao nhà máy</b><div class="hint" style="margin:0">${all.length} chuyến • ${active} đang xử lý</div></div><button class="btn small" onclick="newChuyen()">＋ Chuyến mới</button></div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;margin-top:8px"><input value="${esc(banQ)}" placeholder="Tìm tên chuyến hoặc ngày..." onchange="banQ=this.value;render()"><select onchange="banSort=this.value;render()"><option value="new" ${banSort==='new'?'selected':''}>Mới trước</option><option value="old" ${banSort==='old'?'selected':''}>Cũ trước</option><option value="debt" ${banSort==='debt'?'selected':''}>Nợ cao trước</option></select></div>
+    <div class="filter-chips" style="margin-top:7px;overflow-x:auto;white-space:nowrap">${chips}</div>
+  </div>
+  <div class="row-flex" style="gap:5px;margin-bottom:8px"><div class="stat mini"><b>${fkg(received)}</b><small>kg NM nhận</small></div><div class="stat mini"><b>${fmt(debt)}</b><small>nợ NM</small></div><div class="stat mini"><b>${filtered.length}</b><small>đang xem</small></div></div>
+  <div class="ban-list">${filtered.map(renderBanRow).join('')||'<div class="card"><i>Không có chuyến phù hợp.</i></div>'}</div>
+  ${banDetailId&&db.chuyen.find(c=>c.id===banDetailId)?renderBanDetail(db.chuyen.find(c=>c.id===banDetailId)):''}`;
+}
+function renderBanRow(c){
+  const s=cStats(c),st=banStatus(c),no=Math.max(0,(c.nmTien||0)-(c.nmDaTra||0));
+  return`<div class="card" style="padding:8px;margin:5px 0;border-left:4px solid ${st.key==='done'?'var(--ok)':st.key==='debt'?'var(--danger)':'var(--accent)'}"><div class="row-flex" style="border:0;gap:7px;align-items:center"><div style="min-width:0;flex:1"><b style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🚚 ${esc(c.ten)} ${c.id===db.active?'🟢':''}</b><small class="hint">${c.ngay||'—'} • ${s.ps.length} phiếu • ${fkg(s.kg)}kg mua</small></div><span class="tag ${st.cls}">${st.label}</span><button class="btn small ghost" onclick="toggleBanDetail('${c.id}')">${banDetailId===c.id?'Thu gọn':'Mở'}</button></div><div class="row-flex" style="border:0;margin-top:6px;font-size:12px"><span>NM: <b>${c.nmKg?fkg(c.nmKg)+'kg':'—'}</b> • ${c.nmTien?fmt(c.nmTien)+'đ':'chưa chốt'}</span><span style="text-align:right;color:${no>0?'var(--danger)':'var(--muted)'}">${no>0?'Nợ '+fmt(no)+'đ':(c.nmTien?'Đủ tiền':'Chưa thu')}</span></div></div>`;
+}
+function toggleBanDetail(id){banDetailId=banDetailId===id?null:id;render();}
+function renderBanDetail(c){
+  const s=cStats(c),nmNo=Math.max(0,(c.nmTien||0)-(c.nmDaTra||0));
+  return`<div class="card" style="margin:8px 0;border:2px solid var(--accent)"><div class="row-flex"><h3 style="margin:0">🚚 ${esc(c.ten)}</h3><button class="btn small ghost" onclick="banDetailId=null;render()">✕ Đóng</button></div><div class="hint">${c.ngay||'—'} • Trạng thái: ${TT[c.tt]||'—'}</div>
+    <details open style="margin-top:8px"><summary>① Mua tại ao — ${s.ps.length} phiếu • ${fkg(s.kg)}kg • ${fmt(s.tien)}đ</summary><div style="font-size:12px;margin-top:5px">${s.ps.map(p=>`<div style="padding:3px 0;border-bottom:1px solid var(--border)">• ${esc(kTen(p.khachId))} • ${p.loai==='su'?'sú':'thẻ'} sz${p.size} • ${fkg(p.kg)}kg • ${fmt(calcPhieuTotal(p))}đ</div>`).join('')||'<i>Chưa có phiếu.</i>'}</div></details>
+    <div class="step" style="margin-top:8px"><b class="n">2</b>Giao nhà máy<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-top:6px"><div><label>Chi phí chuyến</label><input type="number" value="${c.chiPhi||''}" placeholder="0" onchange="updChuyen('${c.id}','chiPhi',this.value)"></div><div><label>Cò</label><select onchange="updChuyen('${c.id}','coId',this.value)"><option value="">— không —</option>${db.co.map(x=>`<option value="${x.id}" ${c.coId===x.id?'selected':''}>${esc(x.ten)} ${fmt(x.hg)}đ/kg</option>`).join('')}</select></div><div><label>Kg NM nhận</label><input type="number" value="${c.nmKg||''}" placeholder="0" onchange="updChuyen('${c.id}','nmKg',this.value)"></div><div><label>Giá NM/kg</label><input type="number" value="${c.giaNM||''}" placeholder="0" onchange="updGiaNM('${c.id}',this.value)"></div><div><label>Tổng NM trả</label><input type="number" value="${c.nmTien||''}" placeholder="Tự tính" onchange="updChuyen('${c.id}','nmTien',this.value)"></div></div>${c.coId?`<label style="display:flex;align-items:center;gap:5px;margin-top:6px"><input type="checkbox" style="width:auto" ${c.coDaTra?'checked':''} onchange="updChuyen('${c.id}','coDaTra',this.checked)"> Đã trả hoa hồng cò</label>`:''}${c.nmKg?`<div class="hint">NM nhận ${fkg(c.nmKg)}kg ${c.giaNM?'× '+fmt(c.giaNM)+'đ/kg':''} → ${fmt(c.nmTien)}đ</div>`:''}${c.nmTien?`<div class="row-flex" style="border:0;font-size:12px;margin-top:5px"><span>Đã trả: <b>${fmt(c.nmDaTra||0)}đ</b></span><span style="color:${nmNo>0?'var(--danger)':'var(--ok)'};font-weight:700">${nmNo>0?'Còn nợ: '+fmt(nmNo)+'đ':'Đã đủ tiền'}</span></div><button class="btn small" onclick="thuTienNM('${c.id}')">💰 Thu tiền NM</button>`:''}</div>
+    <div class="step" style="margin-top:8px"><b class="n">3</b>${kqText(s)}</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">${c.tt<3?`<button class="btn small" onclick="nextTT('${c.id}')">▶ ${TT[c.tt+1]}</button>`:'<span class="tag ok">Đã tất toán ✅</span>'}<button class="btn small ghost" onclick="shareChuyen('${c.id}')">📤 Gửi Zalo</button><button class="btn small ghost" onclick="delChuyen('${c.id}')">🗑 Xóa chuyến</button></div></div>`;
+}
+function newChuyen(){const ten=prompt('Tên chuyến','Chuyến '+new Date().toLocaleDateString('vi-VN'));if(ten){const c={id:uid(),ten:ten.trim(),ngay:today(),tt:0,chiPhi:0,nmKg:0,nmTien:0,nmDaTra:0,giaNM:0,coId:null,coDaTra:false,logs:[{ts:Date.now(),msg:'Tạo chuyến'}]};db.chuyen.unshift(c);db.active=c.id;banDetailId=c.id;save();render();}}
+function updChuyen(id,f,v){const c=db.chuyen.find(x=>x.id===id);if(!c)return;if(f==='coId')c[f]=v;else if(f==='coDaTra')c[f]=!!v;else c[f]=Math.max(0,parseNum(v));if(f==='nmKg'&&c.giaNM)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
+function updGiaNM(id,v){const c=db.chuyen.find(x=>x.id===id);if(!c)return;c.giaNM=Math.max(0,parseNum(v));if(c.giaNM&&c.nmKg)c.nmTien=Math.round(c.giaNM*c.nmKg);save();render();}
+function thuTienNM(id){const c=db.chuyen.find(x=>x.id===id);if(!c)return;const no=Math.max(0,(c.nmTien||0)-(c.nmDaTra||0));const t=parseNum(prompt(`Số tiền NM trả đợt này (còn nợ ${fmt(no)}đ):`));if(t>0){if(t>no){alert('⚠️ Số tiền thu không được vượt quá công nợ NM.');return;}c.nmDaTra=(c.nmDaTra||0)+t;c.logs=c.logs||[];c.logs.push({ts:Date.now(),msg:'NM trả '+fmt(t)+'đ'});save();vib();render();}}
 function nextTT(id){const c=db.chuyen.find(x=>x.id===id);c.tt++;c.logs.push({ts:Date.now(),msg:'→ '+TT[c.tt]});save();render();}
-function delChuyen(id){if(confirm('Xoá chuyến + phiếu của nó?')){db.phieu=db.phieu.filter(p=>p.chuyenId!==id);db.chuyen=db.chuyen.filter(c=>c.id!==id);db.active=null;save();render();}}
+function delChuyen(id){if(confirm('Xoá chuyến + phiếu của nó?')){db.phieu=db.phieu.filter(p=>p.chuyenId!==id);db.chuyen=db.chuyen.filter(c=>c.id!==id);db.active=null;banDetailId=null;save();render();}}
 function shareChuyen(id){const c=db.chuyen.find(x=>x.id===id);const s=cStats(c);const txt=`CHUYẾN ${c.ten}\n① MUA: ${fkg(s.kg)}kg = ${fmt(s.tien)}đ\n② CP: ${fmt(s.cp)}đ | NM: ${fkg(c.nmKg)}kg = ${fmt(c.nmTien)}đ (đã nhận ${fmt(c.nmDaTra||0)}đ)\n③ Hao hụt ${s.hao!=null?s.hao.toFixed(1)+'%':'—'} | Lãi/lỗ ${s.loi!=null?fmt(s.loi)+'đ':'—'}`;if(navigator.share)navigator.share({text:txt}).catch(()=>copyText(txt));else copyText(txt);}
 
 // ===== 📒 SỔ =====
@@ -971,9 +977,7 @@ function renderSo(){
     <button onclick="soSub='gia';render()">💰<br>Bảng giá</button>
     <button onclick="soSub='co';render()">🤝<br>Cò</button>
     <button onclick="soSub='nv';render()">👷<br>Nhân viên</button>
-    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>
-    <button onclick="soSub='account';render()">⚙️<br>Tài khoản</button>`:`<button onclick="openRemindersList()">🔔<br>Nhắc hẹn</button>
-    <button onclick="doSignOut()">🚪<br>Đăng xuất</button>`}
+    <button onclick="soSub='data';render()">🗄<br>Dữ liệu</button>`:`<button onclick="openRemindersList()">🔔<br>Nhắc hẹn</button>`}
   </div>`;
   if(soSub==='khach')return soKhach();
   if(soSub==='pay')return soPay();
@@ -982,19 +986,7 @@ function renderSo(){
   if(soSub==='gia')return soGia();
   if(soSub==='co')return soCo();
   if(soSub==='nv')return soNhanVien();
-  if(soSub==='account')return soAccount();
   return soData();
-}
-function soAccount(){
-  const phone=currentLaiPhone();
-  return backBtn+`<div class="card" style="margin-top:8px;">
-    <h3>⚙️ Tài khoản Lái</h3>
-    <label>Số điện thoại đang đăng nhập</label>
-    <input value="${esc(phone)}" disabled>
-    <button class="btn small ghost" onclick="changeLaiPassword()">🔑 Đổi mật khẩu</button>
-    <button class="btn small ghost" onclick="changeLaiPhone()">📱 Đổi số điện thoại</button>
-    <button class="btn small danger" onclick="doSignOut()">🚪 Đăng xuất khỏi máy này</button>
-  </div>`;
 }
 function myEmployeeName(){const e=(db.employees||[]).find(x=>x.id===myEmployeeId);return e?e.name:'Nhân viên';}
 function soNhanVien(){
@@ -1024,33 +1016,13 @@ function soNhanVien(){
 function addEmployee(){
   const name=prompt('Tên nhân viên:');if(!name||!name.trim())return;
   const code=Math.random().toString(36).substring(2,8).toUpperCase();
-  const empId=uid();
   db.employees=db.employees||[];
-  db.employees.push({id:empId,name:name.trim(),code,active:true,createdAt:Date.now()});
+  db.employees.push({id:uid(),name:name.trim(),code,active:true,createdAt:Date.now()});
   save();render();
-  // Ghi vào bảng tra cứu toàn cục để nhân viên gõ mã là tự tìm đúng "phòng dữ liệu" của Lái này
-  if(typeof firebase!=='undefined'&&cloudReady&&myTenantId){
-    firebase.firestore().collection('employeeCodes').doc(code).set({tenantId:myTenantId,employeeId:empId,active:true,createdAt:Date.now()}).catch(err=>console.warn('Lỗi đăng ký mã nhân viên lên mây:',err));
-  }
   alert('✅ Đã tạo mã cho '+name.trim()+':\n\n'+code+'\n\nĐưa mã này cho nhân viên nhập lúc mở app lần đầu trên máy của họ.');
 }
-function toggleEmployee(id){
-  const e=db.employees.find(x=>x.id===id);if(!e)return;
-  e.active=e.active===false?true:false;save();render();
-  if(typeof firebase!=='undefined'&&cloudReady&&myTenantId){
-    firebase.firestore().collection('employeeCodes').doc(e.code).set({tenantId:myTenantId,employeeId:e.id,active:e.active,createdAt:Date.now()},{merge:true}).catch(()=>{});
-  }
-}
-function delEmployee(id){
-  if(!confirm('Xoá nhân viên này? Các ao đang gán cho họ sẽ về "chưa gán".'))return;
-  const e=db.employees.find(x=>x.id===id);
-  db.tin.forEach(t=>{if(t.assignedTo===id)t.assignedTo=null;});
-  db.employees=(db.employees||[]).filter(x=>x.id!==id);
-  save();render();
-  if(e&&typeof firebase!=='undefined'&&cloudReady){
-    firebase.firestore().collection('employeeCodes').doc(e.code).delete().catch(()=>{});
-  }
-}
+function toggleEmployee(id){const e=db.employees.find(x=>x.id===id);if(e){e.active=e.active===false?true:false;save();render();}}
+function delEmployee(id){if(confirm('Xoá nhân viên này? Các ao đang gán cho họ sẽ về "chưa gán".')){db.tin.forEach(t=>{if(t.assignedTo===id)t.assignedTo=null;});db.employees=(db.employees||[]).filter(x=>x.id!==id);save();render();}}
 function assignTin(id,empId){const t=db.tin.find(x=>x.id===id);if(t){t.assignedTo=empId||null;save();render();}}
 function afterSoRender(){if(soSub==='khach'&&!selKhach)renderKhachList();}
 const backBtn=`<button class="btn ghost" onclick="soSub=null;selKhach=null;render()">← Quay lại SỔ</button>`;
@@ -1165,19 +1137,133 @@ function exportCSV(){
 }
 function exportJSON(){db.settings.lastBackup=Date.now();save();const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='so-tom-lai-backup-'+today()+'.json';a.click();alert('🗂️ Đã sao lưu. Cất file vào Zalo/Drive để giữ an toàn.');}
 function importJSON(){document.getElementById('fileInput').click();}
-function importData(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=function(ev){try{const data=JSON.parse(ev.target.result);if(confirm('Khôi phục sẽ THAY THẾ toàn bộ dữ liệu. Tiếp tục?')){db=data;db.settings=Object.assign({autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false},db.settings||{});if(!db.payments)db.payments=[];if(!db.von)db.von=[];save();applyTheme();render();alert('✅ Khôi phục thành công!');}}catch(err){alert('❌ Lỗi: '+err.message);}};reader.readAsText(file);e.target.value='';}
-function resetAll(){if(confirm('XOÁ TOÀN BỘ dữ liệu?')){if(confirm('Chắc chắn? Không khôi phục được!')){localStorage.removeItem(KEY);location.reload();}}}
+function importData(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=function(ev){try{const data=JSON.parse(ev.target.result);const valid=data&&Array.isArray(data.phieu)&&Array.isArray(data.chuyen)&&Array.isArray(data.sheets);if(!valid){alert('❌ File không đúng định dạng sao lưu Sổ Cân Tôm.');return;}if(confirm('Khôi phục sẽ THAY THẾ toàn bộ dữ liệu. Tiếp tục?')){db=Object.assign({tin:[],phieu:[],chuyen:[],khach:[],co:[],gia:[],tra:[],von:[],sheets:[],employees:[],activeSheet:null,active:null,payments:[],settings:{}},data);db.settings=Object.assign({autoDec:false,decimalPlaces:1,colsPerTab:5,dark:false,font:'normal',vibrate:true,dismissedReminders:[],lastBackup:0,statsHidden:false},db.settings||{});if(!db.payments)db.payments=[];if(!db.von)db.von=[];save();applyTheme();ensureActive();ensureSheet();render();alert('✅ Khôi phục thành công!');}}catch(err){alert('❌ Lỗi: '+err.message);}};reader.readAsText(file);e.target.value='';}
+async function resetAll(){
+  if(myRole!=='lai'){alert('Chỉ Lái mới được reset toàn bộ dữ liệu.');return;}
+  if(!confirm('XOÁ TOÀN BỘ dữ liệu trên máy và dữ liệu đồng bộ?'))return;
+  if(!confirm('Chắc chắn? Thao tác này không khôi phục được nếu không có file sao lưu.'))return;
+  clearTimeout(cloudPushTimer);suppressCloudPush=true;stopCloudListen();
+  localStorage.setItem(RESET_KEY,JSON.stringify({ts:Date.now(),status:'pending'}));
+  localStorage.removeItem(KEY);
+  try{
+    if(cloudReady&&navigator.onLine){
+      await cloudClearAll();
+      localStorage.removeItem(RESET_KEY);
+      alert('✅ Đã reset dữ liệu trên máy và đồng bộ cloud.');
+    }else{
+      alert('✅ Đã reset dữ liệu trên máy. Điện thoại đang offline; cloud sẽ được xóa khi mở lại lúc có mạng.');
+    }
+  }catch(e){
+    alert('⚠️ Đã xóa dữ liệu trên máy nhưng chưa xóa được cloud. Ứng dụng sẽ tự thử lại khi mở lúc có mạng.');
+  }
+  location.reload();
+}
 
 const net=()=>updateNetBadge();
 window.addEventListener('online',()=>{updateNetBadge();if(cloudReady)cloudPush();});
 window.addEventListener('offline',net);
-net();
 window.addEventListener('resize',fitTableRows);
 window.addEventListener('orientationchange',()=>setTimeout(fitTableRows,350));
 document.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();enterValue();}});
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 // ========================= 👷 PHÂN QUYỀN + ☁ ĐỒNG BỘ THỜI GIAN THỰC =========================
+const firebaseConfig=window.__APP_FIREBASE_CONFIG;
+const LICENSE_STORAGE_KEY='soCanTom_license_v1';
+const TRIAL_STORAGE_KEY='soCanTom_trial_v1';
+const TRIAL_DAYS=15;
+const TRIAL_MS=TRIAL_DAYS*864e5;
+const LICENSE_OFFLINE_GRACE=7*864e5;
+let myRole='lai',myEmployeeId=null,cloudReady=false,cloudSyncState='off',cloudListening=false,suppressCloudPush=false,cloudPushTimer=null,cloudUnsubs=[];
+let licenseState=null,licenseChecking=false;
+
+function getDeviceId(){
+  let id=localStorage.getItem('soCanTom_device_id');
+  if(!id){id='dev_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);localStorage.setItem('soCanTom_device_id',id);}
+  return id;
+}
+function normalizeLicenseKey(v){return String(v||'').trim().toUpperCase().replace(/[\s_]+/g,'-').replace(/[^A-Z0-9-]/g,'');}
+function licenseDocId(key){return normalizeLicenseKey(key);}
+function readLicenseState(){try{return JSON.parse(localStorage.getItem(LICENSE_STORAGE_KEY)||'null');}catch(e){return null;}}
+function saveLicenseState(v){licenseState=v;localStorage.setItem(LICENSE_STORAGE_KEY,JSON.stringify(v));}
+function readTrialState(){try{return JSON.parse(localStorage.getItem(TRIAL_STORAGE_KEY)||'null');}catch(e){return null;}}
+function ensureTrialState(){
+  let t=readTrialState();
+  if(!t||!Number(t.startedAt)){t={startedAt:Date.now(),days:TRIAL_DAYS};localStorage.setItem(TRIAL_STORAGE_KEY,JSON.stringify(t));}
+  return t;
+}
+function trialRemainingMs(){const t=ensureTrialState();return Math.max(0,Number(t.startedAt)+TRIAL_MS-Date.now());}
+function trialIsActive(){return trialRemainingMs()>0;}
+function trialRemainingDays(){return Math.ceil(trialRemainingMs()/864e5);}
+function trialMessage(){return 'Bạn đang dùng thử miễn phí. Còn '+trialRemainingDays()+' ngày.';}
+function licenseIsUsable(v,offline=false){
+  if(!v||v.active===false)return false;
+  if(v.expiresAt&&Date.now()>=Number(v.expiresAt))return false;
+  if(offline&&v.checkedAt&&Date.now()-Number(v.checkedAt)>LICENSE_OFFLINE_GRACE)return false;
+  const allowed=Array.isArray(v.allowedDevices)?v.allowedDevices.filter(Boolean):[];
+  if(allowed.length&&!allowed.includes(getDeviceId()))return false;
+  return true;
+}
+function licenseDataIsUsable(data){
+  if(!data||data.active===false)return false;
+  if(data.expiresAt&&Date.now()>=Number(data.expiresAt))return false;
+  const allowed=Array.isArray(data.allowedDevices)?data.allowedDevices.filter(Boolean):[];
+  return !allowed.length||allowed.includes(getDeviceId());
+}
+function licenseMessage(data){
+  if(!data)return 'Khóa không tồn tại hoặc chưa được kích hoạt.';
+  if(data.active===false)return 'Khóa bản quyền đã bị khóa.';
+  if(data.expiresAt&&Date.now()>=Number(data.expiresAt))return 'Khóa bản quyền đã hết hạn.';
+  if(Array.isArray(data.allowedDevices)&&data.allowedDevices.length&&!data.allowedDevices.includes(getDeviceId()))return 'Khóa này chưa được cấp cho thiết bị hiện tại.';
+  return 'Không thể xác thực khóa bản quyền.';
+}
+function showLicenseGate(msg){
+  let g=document.getElementById('licenseGate');
+  if(!g){
+    g=document.createElement('div');g.id='licenseGate';
+    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;';
+    g.innerHTML='<div style="font-size:44px">🦐</div><h2 style="color:var(--text);margin:0">Kích hoạt Sổ Cân Tôm</h2><div style="color:var(--muted);font-size:13px;text-align:center;max-width:330px">Nhập khóa bản quyền để sử dụng ứng dụng trên thiết bị này.</div><input id="licenseKeyInput" autocomplete="off" autocapitalize="characters" placeholder="TOM-XXXX-XXXX" style="width:100%;max-width:320px;text-align:center;font-size:18px;letter-spacing:2px;text-transform:uppercase"><button id="licenseActivateBtn" class="btn" onclick="activateLicense()">🔐 Kích hoạt</button><div id="licenseErr" style="color:var(--danger);font-size:13px;text-align:center;min-height:20px;max-width:340px"></div><div style="color:var(--muted);font-size:11px;text-align:center">Mã thiết bị: '+esc(getDeviceId())+'</div>';
+    document.body.appendChild(g);
+  }
+  const err=document.getElementById('licenseErr');if(err)err.textContent=msg||'';
+  const input=document.getElementById('licenseKeyInput');if(input&&!msg)input.focus();
+}
+function hideLicenseGate(){const g=document.getElementById('licenseGate');if(g)g.remove();}
+async function validateLicense(key){
+  const normalized=normalizeLicenseKey(key);if(!normalized)throw new Error('Nhập khóa bản quyền.');
+  if(!window.firebase||!firebase.firestore)throw new Error('Firebase chưa sẵn sàng.');
+  await firebase.auth().signInAnonymously();
+  const snap=await firebase.firestore().collection('licenses').doc(licenseDocId(normalized)).get();
+  const data=snap.exists?snap.data():null;
+  if(!licenseDataIsUsable(data))throw new Error(licenseMessage(data));
+  return {key:normalized,deviceId:getDeviceId(),checkedAt:Date.now(),expiresAt:data.expiresAt||0,name:data.name||'',active:true};
+}
+async function activateLicense(){
+  if(licenseChecking)return;
+  licenseChecking=true;const input=document.getElementById('licenseKeyInput'),btn=document.getElementById('licenseActivateBtn');
+  const key=normalizeLicenseKey(input?input.value:'');if(btn){btn.disabled=true;btn.textContent='⏳ Đang kiểm tra...';}
+  try{const v=await validateLicense(key);saveLicenseState(v);hideLicenseGate();initCloudAndRole();}
+  catch(e){showLicenseGate('❌ '+(e.message||'Không thể kiểm tra khóa.'));}
+  finally{licenseChecking=false;const b=document.getElementById('licenseActivateBtn');if(b){b.disabled=false;b.textContent='🔐 Kích hoạt';}}
+}
+async function initLicenseAndRole(){
+  ensureTrialState();
+  const cached=readLicenseState();licenseState=cached;
+  // Có license hợp lệ thì ưu tiên license; nếu chưa có license, người dùng mới được vào trial.
+  if(cached&&navigator.onLine&&window.firebase){
+    showLicenseGate('Đang kiểm tra bản quyền...');
+    try{const v=await validateLicense(cached.key);saveLicenseState(v);hideLicenseGate();initCloudAndRole();return;}
+    catch(e){if(licenseIsUsable(cached,true)){licenseState=cached;hideLicenseGate();initCloudAndRole();return;}}
+  }else if(cached&&licenseIsUsable(cached,true)){
+    hideLicenseGate();initCloudAndRole();return;
+  }
+  if(trialIsActive()){
+    // Không tạo/hiển thị ô nhập key trong 15 ngày đầu.
+    hideLicenseGate();initCloudAndRole();return;
+  }
+  showLicenseGate('Đã hết thời gian dùng thử miễn phí 15 ngày. Nhập khóa bản quyền để tiếp tục.');
+}
+const SYNC_COLLECTIONS=['tin','sheets','phieu','khach','chuyen','tra','gia','co'];
 
 function updateNetBadge(){
   const b=document.getElementById('netBadge');if(!b)return;
@@ -1189,12 +1275,11 @@ function updateNetBadge(){
 }
 
 function initCloudAndRole(){
-  try{ if(!firebase.apps.length) firebase.initializeApp(firebaseConfig); }catch(e){console.warn('firebase init',e);}
+  try{ if(window.firebase&&!firebase.apps.length) firebase.initializeApp(window.__APP_FIREBASE_CONFIG); }catch(e){console.warn('firebase init',e);}
   const savedRole=localStorage.getItem('lai_role');
   const savedEmpId=localStorage.getItem('lai_emp_id');
-  const savedTenantId=localStorage.getItem('lai_tenant_id');
-  if(savedRole==='lai'){myRole='lai';myTenantId=savedTenantId||null;enterApp();}
-  else if(savedRole==='nv'&&savedEmpId&&savedTenantId){myRole='nv';myEmployeeId=savedEmpId;myTenantId=savedTenantId;enterApp();}
+  if(savedRole==='lai'){myRole='lai';enterApp();}
+  else if(savedRole==='nv'&&savedEmpId){myRole='nv';myEmployeeId=savedEmpId;enterApp();}
   else showRoleGate();
 }
 
@@ -1202,16 +1287,10 @@ function showRoleGate(msg){
   let g=document.getElementById('roleGate');
   if(!g){
     g=document.createElement('div');g.id='roleGate';
-    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;overflow:auto;';
+    g.style.cssText='position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;';
     g.innerHTML=`<div style="font-size:44px">🦐</div><h2 style="color:var(--text)">Sổ Cân Tôm • Lái</h2>
       <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
-        <div id="laiLoginBox" style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1.5px solid var(--accent);border-radius:10px;background:var(--accent-bg)">
-          <b style="color:var(--accent)">👑 Đăng nhập Lái (chủ)</b>
-          <input id="laiPhone" type="tel" placeholder="Số điện thoại của bạn" inputmode="numeric">
-          <input id="laiPass" type="password" placeholder="Mật khẩu">
-          <button class="btn" onclick="chooseRoleLai()">Đăng nhập / Tạo tài khoản</button>
-          <small style="color:var(--muted)">Lần đầu: gõ số điện thoại + đặt 1 mật khẩu bất kỳ (≥6 ký tự) để tạo tài khoản. Lần sau đăng nhập lại bằng đúng 2 thông tin này.</small>
-        </div>
+        <button class="btn" onclick="chooseRoleLai()">👑 Tôi là Lái (chủ)</button>
         <div style="text-align:center;color:var(--muted);font-size:12px">— hoặc —</div>
         <input id="empCodeInput" placeholder="Nhập mã nhân viên" style="text-align:center;font-size:18px;letter-spacing:3px;text-transform:uppercase">
         <button class="btn ghost" onclick="chooseRoleEmployee()">👤 Vào với mã nhân viên</button>
@@ -1222,192 +1301,96 @@ function showRoleGate(msg){
   const err=document.getElementById('roleErr');if(err)err.textContent=msg||'';
 }
 
-function phoneToFakeEmail(phone){
-  const digits=(phone||'').replace(/\D/g,'');
-  return digits+'@socantom-lai.local';
-}
-
-function currentLaiPhone(){
-  const user=(typeof firebase!=='undefined'&&firebase.auth)?firebase.auth().currentUser:null;
-  if(!user||!user.email)return '(chưa rõ)';
-  return user.email.split('@')[0];
-}
-
-function doSignOut(){
-  if(!confirm('Đăng xuất khỏi thiết bị này? Lần sau cần đăng nhập lại.'))return;
-  localStorage.removeItem('lai_role');
-  localStorage.removeItem('lai_emp_id');
-  localStorage.removeItem('lai_tenant_id');
-  if(typeof firebase!=='undefined'&&firebase.auth){firebase.auth().signOut().catch(()=>{});}
-  location.reload();
-}
-
-function reauthLai(currentPass){
-  const user=firebase.auth().currentUser;
-  if(!user||!user.email)return Promise.reject(new Error('Chưa đăng nhập'));
-  const cred=firebase.auth.EmailAuthProvider.credential(user.email,currentPass);
-  return user.reauthenticateWithCredential(cred);
-}
-
-function changeLaiPassword(){
-  if(typeof firebase==='undefined'){alert('❌ Chưa kết nối mạng, thử lại sau.');return;}
-  const cur=prompt('🔒 Nhập mật khẩu hiện tại để xác nhận:');
-  if(!cur)return;
-  const np=prompt('🔑 Nhập mật khẩu mới (ít nhất 6 ký tự):');
-  if(!np||np.length<6){alert('Mật khẩu mới cần ít nhất 6 ký tự.');return;}
-  reauthLai(cur).then(()=>firebase.auth().currentUser.updatePassword(np)).then(()=>{
-    alert('✅ Đã đổi mật khẩu thành công.');
-  }).catch(err=>alert('❌ Lỗi: '+(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential'?'Sai mật khẩu hiện tại.':err.message)));
-}
-
-function changeLaiPhone(){
-  if(typeof firebase==='undefined'){alert('❌ Chưa kết nối mạng, thử lại sau.');return;}
-  const cur=prompt('🔒 Nhập mật khẩu hiện tại để xác nhận:');
-  if(!cur)return;
-  const newPhone=prompt('📱 Nhập số điện thoại mới:');
-  if(!newPhone||newPhone.replace(/\D/g,'').length<9){alert('Số điện thoại không hợp lệ.');return;}
-  reauthLai(cur).then(()=>firebase.auth().currentUser.updateEmail(phoneToFakeEmail(newPhone))).then(()=>{
-    alert('✅ Đã đổi số điện thoại thành công. Lần sau đăng nhập bằng số mới.');render();
-  }).catch(err=>{
-    if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential')alert('❌ Sai mật khẩu hiện tại.');
-    else if(err.code==='auth/email-already-in-use')alert('❌ Số điện thoại này đã được dùng cho tài khoản khác.');
-    else alert('❌ Lỗi: '+err.message);
-  });
-}
-
 function chooseRoleLai(){
-  const phone=(document.getElementById('laiPhone').value||'').trim();
-  const pass=(document.getElementById('laiPass').value||'').trim();
-  if(!phone||phone.replace(/\D/g,'').length<9){showRoleGate('Nhập đúng số điện thoại (ít nhất 9 số).');return;}
-  if(!pass||pass.length<6){showRoleGate('Mật khẩu cần ít nhất 6 ký tự.');return;}
-  if(typeof firebase==='undefined'){showRoleGate('❌ Không tải được kết nối mạng. Kiểm tra internet rồi thử lại.');return;}
-  showRoleGate('Đang xử lý...');
-  const fakeEmail=phoneToFakeEmail(phone);
-  const auth=firebase.auth();
-  const finish=()=>{
-    // Mỗi Lái = 1 UID riêng của chính họ = "phòng dữ liệu" riêng, không cần giữ chỗ gì cả
-    myTenantId=auth.currentUser.uid;
-    localStorage.setItem('lai_role','lai');localStorage.setItem('lai_tenant_id',myTenantId);
-    myRole='lai';
-    const g=document.getElementById('roleGate');if(g)g.remove();
-    enterApp();
-  };
-  auth.signInWithEmailAndPassword(fakeEmail,pass).then(finish).catch(err=>{
-    // Bản Firebase mới gộp chung "chưa có tài khoản" và "sai mật khẩu" thành 1 mã lỗi
-    // (invalid-credential / invalid-login-credentials) — nên cứ thử tạo tài khoản mới;
-    // nếu tạo thất bại vì "đã tồn tại" thì lúc đó mới chắc chắn là sai mật khẩu.
-    const looksLikeFirstTime=['auth/user-not-found','auth/invalid-credential','auth/invalid-login-credentials'].includes(err.code);
-    if(looksLikeFirstTime){
-      auth.createUserWithEmailAndPassword(fakeEmail,pass).then(finish).catch(err2=>{
-        if(err2.code==='auth/email-already-in-use'){
-          showRoleGate('❌ Số điện thoại này đã có tài khoản — sai mật khẩu, kiểm tra lại và thử tiếp.');
-        }else{
-          showRoleGate('❌ Lỗi tạo tài khoản: '+err2.message);
-        }
-      });
-    }else if(err.code==='auth/wrong-password'){
-      showRoleGate('❌ Sai mật khẩu cho số điện thoại này.');
-    }else{
-      showRoleGate('❌ Lỗi: '+err.message);
-    }
-  });
+  localStorage.setItem('lai_role','lai');myRole='lai';
+  const g=document.getElementById('roleGate');if(g)g.remove();
+  enterApp();
 }
 
 function chooseRoleEmployee(){
   const code=(document.getElementById('empCodeInput').value||'').trim().toUpperCase();
   if(!code){showRoleGate('Nhập mã nhân viên');return;}
   showRoleGate('Đang kiểm tra mã...');
-  if(typeof firebase==='undefined'){showRoleGate('❌ Không tải được kết nối mạng. Kiểm tra internet rồi thử lại.');return;}
-  try{
-    firebase.auth().signInAnonymously()
-      .then(()=>firebase.firestore().collection('employeeCodes').doc(code).get())
-      .then(codeSnap=>{
-        if(!codeSnap.exists||codeSnap.data().active===false){showRoleGate('❌ Mã không đúng hoặc đã bị khoá. Hỏi lại lái tôm.');return;}
-        const tenantId=codeSnap.data().tenantId,empId=codeSnap.data().employeeId;
-        localStorage.setItem('lai_role','nv');localStorage.setItem('lai_emp_id',empId);localStorage.setItem('lai_tenant_id',tenantId);
-        myRole='nv';myEmployeeId=empId;myTenantId=tenantId;
-        const g=document.getElementById('roleGate');if(g)g.remove();
-        enterApp();
-      }).catch(err=>{showRoleGate('❌ Lỗi mạng: '+err.message+' — thử lại khi có sóng.');});
-  }catch(err){showRoleGate('❌ Lỗi kết nối: '+err.message);}
+  firebase.auth().signInAnonymously().then(()=>firebase.firestore().collection('shared').doc('employees').get()).then(snap=>{
+    const list=(snap.exists?snap.data().list:[])||[];
+    const emp=list.find(x=>x.code===code&&x.active!==false);
+    if(!emp){showRoleGate('❌ Mã không đúng hoặc đã bị khoá. Hỏi lại lái tôm.');return;}
+    localStorage.setItem('lai_role','nv');localStorage.setItem('lai_emp_id',emp.id);
+    myRole='nv';myEmployeeId=emp.id;
+    const g=document.getElementById('roleGate');if(g)g.remove();
+    enterApp();
+  }).catch(err=>{showRoleGate('❌ Lỗi mạng: '+err.message+' — thử lại khi có sóng.');});
 }
 
 function enterApp(){
   mainTab=(myRole==='nv')?'tin':'bang';
   render();applyRoleNav();checkReminders();updateNetBadge();
-  try{
-    if(typeof firebase==='undefined')throw new Error('Firebase SDK chưa tải được (mạng chậm hoặc bị chặn)');
-    const afterAuth=()=>{
-      cloudReady=true;cloudListen();updateNetBadge();
-      if(myRole==='lai'){
-        firebase.firestore().collection('tenants').doc(myTenantId).collection('data').doc('tin').get().then(snap=>{
-          if(!snap.exists)cloudPush(); // lần đầu bật đồng bộ: đẩy dữ liệu sẵn có trên máy lái lên làm gốc
-        });
+  firebase.auth().signInAnonymously().then(async()=>{
+    cloudReady=true;updateNetBadge();
+    const pending=localStorage.getItem(RESET_KEY);
+    if(myRole==='lai'&&pending){
+      try{
+        await cloudClearAll();
+        localStorage.removeItem(RESET_KEY);
+      }catch(e){
+        cloudSyncState='error';updateNetBadge();
+        console.warn('reset cloud pending',e);
+        return;
       }
-    };
-    if(myRole==='lai'){
-      // Lái đã đăng nhập thật (SĐT+mật khẩu) — TUYỆT ĐỐI không gọi signIn nào khác ở đây kẻo mất phiên đăng nhập thật.
-      // Chỉ chờ Firebase xác nhận lại trạng thái đăng nhập (tự khôi phục từ phiên trước nếu có).
-      const unsub=firebase.auth().onAuthStateChanged(user=>{
-        unsub();
-        if(user){
-          myTenantId=user.uid; // tenant của Lái luôn = đúng UID của chính họ
-          localStorage.setItem('lai_tenant_id',myTenantId);
-          afterAuth();
-        }else{ // phiên cũ hết hạn hoặc chưa từng đăng nhập ở máy này — quay lại màn hình đăng nhập
-          localStorage.removeItem('lai_role');localStorage.removeItem('lai_tenant_id');
-          showRoleGate('Phiên đăng nhập đã hết — vui lòng đăng nhập lại.');
-        }
-      });
-    }else{
-      firebase.auth().signInAnonymously().then(afterAuth).catch(err=>{console.warn(err);cloudSyncState='error';updateNetBadge();});
     }
-  }catch(err){
-    // Firebase không tải được (mạng chặn/CDN lỗi) — app vẫn dùng bình thường ở chế độ offline, không đồng bộ
-    console.warn('Không kết nối được máy chủ đồng bộ:',err);
-    cloudSyncState='error';updateNetBadge();
-  }
-}
-
-function tenantDoc(name){
-  return firebase.firestore().collection('tenants').doc(myTenantId).collection('data').doc(name);
+    cloudListen();updateNetBadge();
+    if(myRole==='lai'&&!pending){
+      firebase.firestore().collection('shared').doc('tin').get().then(snap=>{
+        if(!snap.exists)cloudPush(); // lần đầu bật đồng bộ: đẩy dữ liệu sẵn có trên máy lái lên làm gốc
+      });
+    }
+  }).catch(err=>{console.warn(err);cloudSyncState='error';updateNetBadge();});
 }
 
 function cloudPush(){
-  if(!cloudReady||suppressCloudPush||!myTenantId)return;
+  if(!cloudReady||suppressCloudPush)return;
   clearTimeout(cloudPushTimer);
   cloudSyncState='syncing';updateNetBadge();
   cloudPushTimer=setTimeout(()=>{
+    const fs=firebase.firestore();
     const jobs=SYNC_COLLECTIONS.map(name=>{
       let list=db[name]||[];
       if(name==='sheets')list=list.map(s=>{const c=Object.assign({},s);delete c.photos;return c;});
-      return tenantDoc(name).set({list,updatedAt:Date.now()});
+      return fs.collection('shared').doc(name).set({list,updatedAt:Date.now()});
     });
-    jobs.push(tenantDoc('employees').set({list:db.employees||[],updatedAt:Date.now()}));
+    jobs.push(fs.collection('shared').doc('employees').set({list:db.employees||[],updatedAt:Date.now()}));
     Promise.all(jobs).then(()=>{cloudSyncState='synced';updateNetBadge();}).catch(()=>{cloudSyncState='error';updateNetBadge();});
   },600); // gộp các thay đổi liên tiếp lại thành 1 lần đẩy, đỡ tốn lượt ghi
 }
 
+function stopCloudListen(){cloudUnsubs.forEach(u=>{try{u();}catch(e){}});cloudUnsubs=[];cloudListening=false;}
+function cloudClearAll(){
+  if(!cloudReady||!window.firebase)return Promise.reject(new Error('Cloud chưa sẵn sàng'));
+  cloudSyncState='syncing';updateNetBadge();
+  const resetAt=Date.now(),fs=firebase.firestore();
+  return Promise.all(SYNC_COLLECTIONS.concat(['employees']).map(name=>fs.collection('shared').doc(name).set({list:[],updatedAt:resetAt,resetAt}))).then(()=>{cloudSyncState='synced';updateNetBadge();});
+}
 function cloudListen(){
-  if(cloudListening||!myTenantId)return;cloudListening=true;
-  SYNC_COLLECTIONS.concat(['employees']).forEach(name=>{
-    tenantDoc(name).onSnapshot(snap=>{
-      if(!snap.exists)return;
-      const remote=(snap.data()||{}).list||[];
-      suppressCloudPush=true;
-      if(name==='sheets'){
-        remote.forEach(rs=>{
-          const local=db.sheets.find(x=>x.id===rs.id);
-          if(local)Object.assign(local,rs,{photos:local.photos||[]});
-          else db.sheets.push(Object.assign({photos:[]},rs));
-        });
-      }else{
-        db[name]=remote;
-      }
-      suppressCloudPush=false;
-      save(true);cloudSyncState='synced';updateNetBadge();render();
-    },err=>{console.warn('sync '+name,err);cloudSyncState='error';updateNetBadge();});
-  });
+  if(cloudListening)return;cloudListening=true;
+  const fs=firebase.firestore();
+  cloudUnsubs=SYNC_COLLECTIONS.concat(['employees']).map(name=>fs.collection('shared').doc(name).onSnapshot(snap=>{
+    if(!snap.exists)return;
+    // Khi reset đang chờ, tuyệt đối không cho snapshot cũ ghi ngược dữ liệu về máy.
+    if(localStorage.getItem(RESET_KEY))return;
+    const remote=(snap.data()||{}).list||[];
+    suppressCloudPush=true;
+    if(name==='sheets'){
+      remote.forEach(rs=>{
+        const local=db.sheets.find(x=>x.id===rs.id);
+        if(local)Object.assign(local,rs,{photos:local.photos||[]});
+        else db.sheets.push(Object.assign({photos:[]},rs));
+      });
+    }else{
+      db[name]=remote;
+    }
+    suppressCloudPush=false;
+    save(true);cloudSyncState='synced';updateNetBadge();render();
+  },err=>{console.warn('sync '+name,err);cloudSyncState='error';updateNetBadge();}));
 }
 </script>
 </body>
